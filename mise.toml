@@ -1,0 +1,10 @@
+[tools]
+rust = "1.99.0"
+python = "3.13.15"
+uv = "0.11.25"
+"github:esp-rs/espup" = "0.18.0"
+"github:esp-rs/espflash" = "4.6.0"
+"cargo:ldproxy" = "0.3.5"
+cmake = "3.31.12"
+ninja = "1.13.2"
+"conda:libxml2" = "2.13.9"

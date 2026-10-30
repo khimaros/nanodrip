@@ -1,0 +1,11 @@
+[package]
+name = "nanodrip-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nanodrip-app = { path = "../nanodrip-app" }
+nanodrip-core = { path = "../nanodrip-core" }
+rand_core = { version = "0.6", features = ["getrandom"] }

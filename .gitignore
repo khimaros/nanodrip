@@ -1,0 +1,10 @@
+/target/
+/firmware/target/
+/firmware/.embuild/
+.espup-export.sh
+nanodrip.env
+/.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.key

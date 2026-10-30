@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanodrip</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --muted: #52514e;
+  --grid: #e4e3df;
+  --band: #2a78d614;
+  --series: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --text: #f0efec;
+    --muted: #c3c2b7;
+    --grid: #33332f;
+    --band: #3987e51f;
+    --series: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; padding: 1.25rem; max-width: 56rem;
+  background: var(--surface); color: var(--text);
+  font: 15px/1.45 system-ui, sans-serif;
+}
+header { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); }
+h1 { margin: 0; font-size: 1rem; font-weight: 600; color: var(--text); }
+#hero { margin: 1.25rem 0; }
+#value { font-size: 4rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+#unit, #detail { color: var(--muted); }
+#detail { margin-top: .35rem; }
+#stale { font-weight: 600; color: var(--text); }
+nav { display: flex; gap: .4rem; margin-bottom: .5rem; }
+button {
+  font: inherit; color: var(--muted); background: none; cursor: pointer;
+  border: 1px solid var(--grid); border-radius: 6px; padding: .2rem .65rem;
+}
+button[aria-pressed="true"] { color: var(--text); border-color: var(--muted); }
+#plot { position: relative; }
+svg { display: block; width: 100%; height: 280px; touch-action: none; }
+.grid { stroke: var(--grid); stroke-width: 1; }
+.axis { fill: var(--muted); font-size: 12px; }
+.band { fill: var(--band); }
+.line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.point { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.cross { stroke: var(--muted); stroke-width: 1; }
+#tip {
+  position: absolute; top: 0; pointer-events: none; display: none; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--grid); border-radius: 6px;
+  padding: .2rem .5rem; font-size: 13px;
+}
+details { margin-top: 1rem; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; margin-top: .5rem; color: var(--text); font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .2rem .5rem .2rem 0; border-bottom: 1px solid var(--grid); }
+th { color: var(--muted); font-weight: 500; }
+footer { margin-top: 1.25rem; color: var(--muted); font-size: 13px; }
+form { display: grid; gap: .5rem; margin-top: .5rem; max-width: 30rem; color: var(--text); }
+label { display: grid; gap: .15rem; color: var(--muted); }
+input, textarea {
+  font: inherit; color: var(--text); background: none; width: 100%;
+  border: 1px solid var(--grid); border-radius: 6px; padding: .3rem .5rem;
+}
+textarea { font-family: monospace; font-size: 12px; height: 3.2rem; }
+#sensor-status, #wifi-status, #target-status, #mqtt-status { color: var(--text); margin-top: .5rem; }
+#totals { display: flex; flex-wrap: wrap; gap: .5rem 2rem; margin: .75rem 0; }
+#selection { display: flex; align-items: center; gap: .6rem; min-height: 1.9rem; color: var(--muted); font-size: 13px; }
+.selecting { fill: var(--muted); opacity: .2; }
+#chart { cursor: crosshair; user-select: none; }
+#totals dt { color: var(--muted); }
+#totals dd { margin: 0; font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.actions { display: flex; gap: .4rem; }
+</style>
+</head>
+<body>
+<header><h1>nanodrip</h1><span id="device"></span></header>
+<section id="hero">
+  <span id="value">--</span> <span id="unit">mg/dl</span>
+  <div id="detail">waiting for the first reading</div>
+</section>
+<nav id="ranges"></nav>
+<div id="selection"><span id="selection-label"></span>
+  <button id="clear-selection" hidden>show full range</button></div>
+<dl id="totals">
+  <div><dt>mean</dt><dd id="mean">--</dd></div>
+  <div><dt id="above-label">time above</dt><dd id="above">--</dd></div>
+  <div><dt id="below-label">time below</dt><dd id="below">--</dd></div>
+</dl>
+<div id="plot">
+  <svg id="chart" role="img" aria-label="glucose over time, in mg/dl"></svg>
+  <div id="tip"></div>
+</div>
+<details>
+  <summary>readings table</summary>
+  <table><thead><tr><th>time</th><th>mg/dl</th><th>trend</th><th>sensor state</th><th>source</th></tr></thead>
+  <tbody id="rows"></tbody></table>
+</details>
+<details id="sensor">
+  <summary>sensor pairing</summary>
+  <div id="sensor-status"></div>
+  <form id="pair-form">
+    <label>pairing code, from the sensor applicator
+      <input id="code" autocomplete="off" inputmode="text" maxlength="6" required></label>
+    <div class="actions">
+      <button type="submit">pair new sensor</button>
+      <button type="button" id="forget">forget sensor</button>
+    </div>
+  </form>
+  <form id="cert-form">
+    <label>certificate part 1 (keks_p1)<textarea id="p1" required></textarea></label>
+    <label>certificate part 2 (keks_p2)<textarea id="p2" required></textarea></label>
+    <label>private key (keks_p3)<textarea id="p3" required></textarea></label>
+    <div class="actions"><button type="submit">save certificates</button></div>
+  </form>
+</details>
+<details id="range">
+  <summary>target range</summary>
+  <div id="target-status"></div>
+  <form id="target-form">
+    <label>low (mg/dl)<input id="target-low" type="number" min="40" max="400" required></label>
+    <label>high (mg/dl)<input id="target-high" type="number" min="40" max="400" required></label>
+    <div class="actions"><button type="submit">save range</button></div>
+  </form>
+</details>
+<details id="feed">
+  <summary>mqtt broker</summary>
+  <div id="mqtt-status"></div>
+  <form id="mqtt-form">
+    <label>broker, as host:port (leave empty to turn off)<input id="mqtt-address" autocomplete="off"></label>
+    <label>username (optional)<input id="mqtt-user" autocomplete="off"></label>
+    <label>password (optional)<input id="mqtt-pass" type="password" autocomplete="off"></label>
+    <div class="actions"><button type="submit">save broker</button></div>
+  </form>
+</details>
+<details id="network">
+  <summary>wifi network</summary>
+  <div id="wifi-status"></div>
+  <form id="wifi-form">
+    <label>network name<input id="ssid" autocomplete="off" maxlength="32" required></label>
+    <label>password<input id="wifi-pass" type="password" autocomplete="off" maxlength="63"></label>
+    <div class="actions"><button type="submit">save network</button></div>
+  </form>
+</details>
+<footer>experimental. do not use for treatment decisions.</footer>
+<script>
+const REFRESH_MS = 30000
+const STALE_SECONDS = 1200
+const TABLE_ROWS = 50
+const READINGS_PER_HOUR = 12
+const MIN_DRAG_PIXELS = 8
+const NARROW_WIDTH = 500
+const RANGES = [["3h", 3], ["24h", 24], ["7d", 168]]
+const MARGIN = {top: 12, right: 12, bottom: 24, left: 38}
+const STATES = {1: "stopped", 2: "warming up", 6: "ok", 7: "needs calibration", 15: "ended", 24: "expired"}
+const svgNs = "http://www.w3.org/2000/svg"
+const $ = id => document.getElementById(id)
+
+let hours = 24
+let readings = []
+let target = [63, 140]
+let selection = null
+
+const stateName = s => STATES[s] || `state ${s}`
+const clockTime = t => new Date(t * 1000).toLocaleString([], {
+  month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})
+const trendText = t => t === null ? "unknown" :
+  `${t > 0 ? "+" : ""}${t.toFixed(1)} mg/dl/min`
+const ageText = s => s < 90 ? `${Math.round(s)} s ago` :
+  s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`
+
+function element(name, attrs, text) {
+  const node = document.createElementNS(svgNs, name)
+  for (const key in attrs) node.setAttribute(key, attrs[key])
+  if (text !== undefined) node.textContent = text
+  return node
+}
+
+function ticks(lo, hi, count) {
+  const step = [20, 50, 100, 200].find(s => (hi - lo) / s <= count) || 200
+  const out = []
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(v)
+  return out
+}
+
+const ERRORS = {
+  "unpaired": "no sensor is paired yet",
+  "not-found": "searching: no sensor seen yet",
+  "ble": "lost the connection to the sensor",
+  "proof": "the sensor failed the key exchange",
+  "challenge": "pairing failed: check the code on the applicator",
+  "rejected": "the sensor rejected this device: pair it again",
+  "missing-certificates": "certificates are needed before this sensor can pair",
+  "certificate": "the sensor rejected the certificates",
+  "protocol": "unexpected message from the sensor",
+  "timeout": "the sensor stopped responding"}
+
+function renderSensor(status) {
+  const lines = [status.paired ? "sensor paired" : "no sensor paired",
+    status.certificates ? "certificates saved" : "certificates missing"]
+  if (status.last_error) lines.push(ERRORS[status.last_error] || status.last_error)
+  $("sensor-status").textContent = lines.join(" / ")
+  if (!status.paired) $("sensor").open = true
+  $("wifi-status").textContent = status.wifi_ssid ? `network: ${status.wifi_ssid}` : "hosting setup network"
+}
+
+async function post(path, fields) {
+  const response = await fetch(path, {method: "POST", headers: {"x-nanodrip": "1"},
+    body: new URLSearchParams(fields).toString()})
+  $("sensor-status").textContent = response.ok ? "saved" : "that value was not accepted"
+  if (response.ok) setTimeout(refresh, 500)
+  return response.ok
+}
+
+$("pair-form").onsubmit = event => {
+  event.preventDefault()
+  if (confirm("pairing a new sensor clears the history on this device. continue?")) {
+    post("/api/pair", {code: $("code").value.trim()})
+  }
+}
+$("cert-form").onsubmit = async event => {
+  event.preventDefault()
+  const fields = {p1: $("p1").value, p2: $("p2").value, p3: $("p3").value}
+  if (await post("/api/certificates", fields)) $("cert-form").reset()
+}
+$("target-form").onsubmit = async event => {
+  event.preventDefault()
+  const response = await fetch("/api/target", {method: "POST", headers: {"x-nanodrip": "1"},
+    body: new URLSearchParams({low: $("target-low").value, high: $("target-high").value}).toString()})
+  $("target-status").textContent = response.ok ? "saved" : "use whole numbers from 40 to 400, low below high"
+  if (response.ok) refresh()
+}
+
+function duration(seconds) {
+  const minutes = Math.round(seconds / 60)
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+function renderTotals(summary) {
+  const covered = summary.above_seconds + summary.below_seconds + summary.in_range_seconds
+  const show = (id, seconds) => {
+    const share = covered ? ` (${Math.round(seconds / covered * 100)}%)` : ""
+    $(id).textContent = covered ? duration(seconds) + share : "--"
+  }
+  show("above", summary.above_seconds)
+  show("below", summary.below_seconds)
+  $("mean").textContent = summary.mean === null ? "--" : `${Math.round(summary.mean)} mg/dl`
+  $("above-label").textContent = `time above ${target[1]}`
+  $("below-label").textContent = `time below ${target[0]}`
+}
+
+$("mqtt-form").onsubmit = async event => {
+  event.preventDefault()
+  const fields = {address: $("mqtt-address").value.trim(), user: $("mqtt-user").value,
+    password: $("mqtt-pass").value}
+  const response = await fetch("/api/mqtt", {method: "POST", headers: {"x-nanodrip": "1"},
+    body: new URLSearchParams(fields).toString()})
+  $("mqtt-status").textContent = response.ok ? "saved" : "use host:port, for example broker.lan:1883"
+  if (response.ok) {
+    $("mqtt-form").reset()
+    setTimeout(refresh, 500)
+  }
+}
+
+function renderMqtt(status) {
+  $("mqtt-status").textContent = status.mqtt_broker
+    ? `broker: ${status.mqtt_broker}, ${status.mqtt_pending} waiting to send`
+    : "mqtt is off"
+}
+
+function renderTarget(status) {
+  target = [status.target_low, status.target_high]
+  $("target-status").textContent = `target ${target[0]} to ${target[1]} mg/dl`
+  if (document.activeElement !== $("target-low") && document.activeElement !== $("target-high")) {
+    $("target-low").value = target[0]
+    $("target-high").value = target[1]
+  }
+}
+
+$("wifi-form").onsubmit = async event => {
+  event.preventDefault()
+  const fields = {ssid: $("ssid").value, password: $("wifi-pass").value}
+  if (await post("/api/wifi", fields)) {
+    $("wifi-form").reset()
+    $("wifi-status").textContent = "joining network: this page may stop responding"
+  }
+}
+$("forget").onclick = () => {
+  if (confirm("forget this sensor and clear the history on this device?")) post("/api/forget", {})
+}
+
+function renderHero(status) {
+  $("device").textContent = status.device
+  renderSensor(status)
+  const latest = status.latest
+  if (!latest) return
+  const age = latest.time === null ? null : Date.now() / 1000 - latest.time
+  const stale = age !== null && age > STALE_SECONDS
+  $("value").textContent = latest.glucose === null || stale ? "--" : latest.glucose
+  const parts = [stateName(latest.state), trendText(latest.trend)]
+  if (age !== null) parts.push(ageText(age))
+  $("detail").textContent = parts.join(" / ")
+  if (stale) {
+    const flag = document.createElement("span")
+    flag.id = "stale"
+    flag.textContent = "stale: "
+    $("detail").prepend(flag)
+  }
+}
+
+function renderChart() {
+  const svg = $("chart")
+  svg.replaceChildren()
+  const width = svg.clientWidth, height = svg.clientHeight
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`)
+  const end = selection ? selection.end : Date.now() / 1000
+  const start = selection ? selection.start : end - hours * 3600
+  const points = readings.filter(r => r.time !== null && r.glucose !== null
+    && r.time >= start && r.time <= end)
+  const values = points.map(p => p.glucose)
+  const lo = Math.min(50, ...values), hi = Math.max(250, ...values)
+  const x = t => MARGIN.left + (t - start) / (end - start) * (width - MARGIN.left - MARGIN.right)
+  const y = v => height - MARGIN.bottom - (v - lo) / (hi - lo) * (height - MARGIN.top - MARGIN.bottom)
+  const bandTop = Math.min(y(target[1]), y(lo)), bandBottom = Math.min(y(target[0]), y(lo))
+  svg.append(element("rect", {class: "band", x: MARGIN.left, y: bandTop,
+    width: width - MARGIN.left - MARGIN.right, height: Math.max(0, bandBottom - bandTop)}))
+  for (const v of ticks(lo, hi, 5)) {
+    svg.append(element("line", {class: "grid", x1: MARGIN.left, x2: width - MARGIN.right, y1: y(v), y2: y(v)}))
+    svg.append(element("text", {class: "axis", x: MARGIN.left - 6, y: y(v) + 4, "text-anchor": "end"}, v))
+  }
+  const spans = width < NARROW_WIDTH ? 2 : 4
+  for (let i = 0; i <= spans; i++) {
+    const t = start + (end - start) * i / spans
+    const anchor = i === 0 ? "start" : i === spans ? "end" : "middle"
+    svg.append(element("text", {class: "axis", x: x(t), y: height - 6, "text-anchor": anchor},
+      end - start > 86400 ? new Date(t * 1000).toLocaleDateString([], {month: "numeric", day: "numeric"})
+        : new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})))
+  }
+  let path = ""
+  points.forEach((p, i) => {
+    const gap = i === 0 || p.time - points[i - 1].time > STALE_SECONDS
+    path += `${gap ? "M" : "L"}${x(p.time).toFixed(1)} ${y(p.glucose).toFixed(1)}`
+  })
+  svg.append(element("path", {class: "line", d: path}))
+  if (points.length) {
+    const last = points[points.length - 1]
+    svg.append(element("circle", {class: "point", cx: x(last.time), cy: y(last.glucose), r: 4}))
+  }
+  const cross = element("line", {class: "cross", y1: MARGIN.top, y2: height - MARGIN.bottom, visibility: "hidden"})
+  svg.append(cross)
+  const plotLeft = MARGIN.left, plotRight = width - MARGIN.right
+  const pointerX = event => {
+    const px = event.clientX - svg.getBoundingClientRect().left
+    return Math.min(plotRight, Math.max(plotLeft, px))
+  }
+  const timeAt = px => start + (px - plotLeft) / (plotRight - plotLeft) * (end - start)
+  const band = element("rect", {class: "selecting", y: MARGIN.top, width: 0,
+    height: height - MARGIN.top - MARGIN.bottom})
+  svg.append(band)
+  let dragFrom = null
+  svg.onpointerdown = event => {
+    dragFrom = pointerX(event)
+    svg.setPointerCapture(event.pointerId)
+  }
+  svg.onpointerup = event => {
+    if (dragFrom === null) return
+    const from = Math.min(dragFrom, pointerX(event)), to = Math.max(dragFrom, pointerX(event))
+    dragFrom = null
+    band.setAttribute("width", 0)
+    if (to - from >= MIN_DRAG_PIXELS) {
+      selection = {start: timeAt(from), end: timeAt(to)}
+      renderRanges()
+      refresh()
+    }
+  }
+  svg.onpointermove = event => {
+    if (dragFrom !== null) {
+      const px = pointerX(event)
+      band.setAttribute("x", Math.min(dragFrom, px))
+      band.setAttribute("width", Math.abs(px - dragFrom))
+      return
+    }
+    if (!points.length) return
+    const box = svg.getBoundingClientRect(), px = event.clientX - box.left
+    const near = points.reduce((a, b) => Math.abs(x(a.time) - px) < Math.abs(x(b.time) - px) ? a : b)
+    cross.setAttribute("x1", x(near.time))
+    cross.setAttribute("x2", x(near.time))
+    cross.setAttribute("visibility", "visible")
+    const tip = $("tip")
+    tip.textContent = `${near.glucose} mg/dl, ${clockTime(near.time)}`
+    tip.style.display = "block"
+    tip.style.left = `${Math.min(x(near.time) + 8, width - tip.offsetWidth)}px`
+  }
+  svg.onpointerleave = () => {
+    cross.setAttribute("visibility", "hidden")
+    $("tip").style.display = "none"
+  }
+}
+
+function renderTable() {
+  const rows = readings.slice(-TABLE_ROWS).reverse().map(r => {
+    const row = document.createElement("tr")
+    const cells = [r.time === null ? "unknown" : clockTime(r.time), r.glucose ?? "--",
+      trendText(r.trend), stateName(r.state), r.backfill ? "backfill" : "live"]
+    for (const value of cells) {
+      const cell = document.createElement("td")
+      cell.textContent = value
+      row.append(cell)
+    }
+    return row
+  })
+  $("rows").replaceChildren(...rows)
+}
+
+function renderRanges() {
+  $("ranges").replaceChildren(...RANGES.map(([label, value]) => {
+    const button = document.createElement("button")
+    button.textContent = label
+    button.setAttribute("aria-pressed", !selection && value === hours)
+    button.onclick = () => { hours = value; selection = null; renderRanges(); refresh() }
+    return button
+  }))
+  $("selection-label").textContent = selection
+    ? `${clockTime(selection.start)} to ${clockTime(selection.end)}, ${duration(selection.end - selection.start)}`
+    : "drag across the chart to select a range"
+  $("clear-selection").hidden = !selection
+}
+
+$("clear-selection").onclick = () => { selection = null; renderRanges(); refresh() }
+
+/// the sensor clock for a wall clock time, from the offset any reading gives.
+function clockFor(time) {
+  const known = readings.find(r => r.time !== null)
+  return known ? Math.round(time - (known.time - known.clock)) : 0
+}
+
+function summaryUrl() {
+  return selection
+    ? `/api/summary?from=${clockFor(selection.start)}&to=${clockFor(selection.end)}`
+    : `/api/summary?hours=${hours}`
+}
+
+async function refresh() {
+  try {
+    const [status, rows, summary] = await Promise.all([
+      fetch("/api/status").then(r => r.json()),
+      fetch(`/api/readings?limit=${hours * READINGS_PER_HOUR}`).then(r => r.json()),
+      fetch(summaryUrl()).then(r => r.json())])
+    readings = rows
+    renderTarget(status)
+    renderMqtt(status)
+    renderTotals(summary)
+    renderHero(status)
+    renderChart()
+    renderTable()
+  } catch {
+    $("detail").textContent = "device unreachable"
+  }
+}
+
+renderRanges()
+refresh()
+setInterval(refresh, REFRESH_MS)
+addEventListener("resize", renderChart)
+</script>
+</body>
+</html>

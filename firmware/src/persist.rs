@@ -1,0 +1,180 @@
+//! pairing state that must survive a reboot, kept in nvs.
+
+use anyhow::Result;
+use esp_idf_svc::nvs::{
+    EspCustomNvsPartition, EspDefaultNvsPartition, EspNvs, NvsCustom, NvsDefault,
+};
+use nanodrip_app::{Feed, HistoryChanges, MqttConfig, Settings, HISTORY_SLOTS};
+
+const NAMESPACE: &str = "nanodrip";
+const MAX_BLOB: usize = 4096;
+const KEY_SIZE: usize = 16;
+const CODE: &str = "code";
+const PART_A: &str = "part_a";
+const PART_B: &str = "part_b";
+const PART_C: &str = "part_c";
+const KEY: &str = "key";
+const ADDRESS: &str = "addr";
+const WIFI_SSID: &str = "wifi_ssid";
+const WIFI_PASS: &str = "wifi_pass";
+const TARGET_RANGE: &str = "target";
+const MQTT_ADDRESS: &str = "mqtt_addr";
+const MQTT_USER: &str = "mqtt_user";
+const MQTT_PASS: &str = "mqtt_pass";
+
+const HISTORY_PARTITION: &str = "history";
+
+/// readings, in their own partition so they cannot crowd out the pairing.
+pub struct History {
+    nvs: EspNvs<NvsCustom>,
+}
+
+fn slot_key(slot: u16) -> String {
+    format!("s{slot}")
+}
+
+impl History {
+    pub fn new() -> Result<Self> {
+        let partition = EspCustomNvsPartition::take(HISTORY_PARTITION)?;
+        Ok(Self {
+            nvs: EspNvs::new(partition, HISTORY_PARTITION, true)?,
+        })
+    }
+
+    pub fn restore(&self, feed: &Feed) {
+        let mut buffer = vec![0u8; MAX_BLOB];
+        for slot in 0..HISTORY_SLOTS {
+            if let Ok(Some(data)) = self.nvs.get_blob(&slot_key(slot), &mut buffer) {
+                feed.restore_slot(data);
+            }
+        }
+    }
+
+    pub fn save(&mut self, changes: HistoryChanges) -> Result<()> {
+        if changes.clear {
+            for slot in 0..HISTORY_SLOTS {
+                self.nvs.remove(&slot_key(slot))?;
+            }
+        }
+        for (slot, data) in changes.slots {
+            self.nvs.set_blob(&slot_key(slot), &data)?;
+        }
+        Ok(())
+    }
+}
+
+pub struct Persist {
+    nvs: EspNvs<NvsDefault>,
+}
+
+impl Persist {
+    pub fn new(partition: EspDefaultNvsPartition) -> Result<Self> {
+        Ok(Self {
+            nvs: EspNvs::new(partition, NAMESPACE, true)?,
+        })
+    }
+
+    fn blob(&self, name: &str) -> Vec<u8> {
+        let mut buffer = vec![0u8; MAX_BLOB];
+        match self.nvs.get_blob(name, &mut buffer) {
+            Ok(Some(value)) => value.to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn text(&self, name: &str) -> Option<String> {
+        String::from_utf8(self.blob(name))
+            .ok()
+            .filter(|text| !text.is_empty())
+    }
+
+    /// the build time values in `defaults` apply until the web ui replaces them.
+    pub fn load_settings(&self, defaults: Settings) -> Settings {
+        let (wifi_ssid, wifi_pass) = match self.text(WIFI_SSID) {
+            Some(ssid) => (Some(ssid), self.text(WIFI_PASS).unwrap_or_default()),
+            None => (defaults.wifi_ssid, defaults.wifi_pass),
+        };
+        let mqtt = self
+            .text(MQTT_ADDRESS)
+            .map(|address| MqttConfig {
+                address,
+                user: self.text(MQTT_USER),
+                password: self.text(MQTT_PASS),
+            })
+            .or(defaults.mqtt);
+        Settings {
+            code: self.text(CODE),
+            part_a: self.blob(PART_A),
+            part_b: self.blob(PART_B),
+            part_c: self.blob(PART_C),
+            wifi_ssid,
+            wifi_pass,
+            target_range: self.target_range(),
+            mqtt,
+            ..Settings::default()
+        }
+    }
+
+    pub fn save_settings(&mut self, settings: &Settings) -> Result<()> {
+        let code = settings.code.as_deref().unwrap_or("");
+        self.nvs.set_blob(CODE, code.as_bytes())?;
+        self.nvs.set_blob(PART_A, &settings.part_a)?;
+        self.nvs.set_blob(PART_B, &settings.part_b)?;
+        self.nvs.set_blob(PART_C, &settings.part_c)?;
+        let ssid = settings.wifi_ssid.as_deref().unwrap_or("");
+        self.nvs.set_blob(WIFI_SSID, ssid.as_bytes())?;
+        self.nvs
+            .set_blob(WIFI_PASS, settings.wifi_pass.as_bytes())?;
+        let mqtt = settings.mqtt.as_ref();
+        let address = mqtt.map_or("", |mqtt| mqtt.address.as_str());
+        let user = mqtt.and_then(|mqtt| mqtt.user.as_deref()).unwrap_or("");
+        let password = mqtt.and_then(|mqtt| mqtt.password.as_deref()).unwrap_or("");
+        self.nvs.set_blob(MQTT_ADDRESS, address.as_bytes())?;
+        self.nvs.set_blob(MQTT_USER, user.as_bytes())?;
+        self.nvs.set_blob(MQTT_PASS, password.as_bytes())?;
+        if let Some((low, high)) = settings.target_range {
+            let [low_a, low_b] = low.to_le_bytes();
+            let [high_a, high_b] = high.to_le_bytes();
+            self.nvs
+                .set_blob(TARGET_RANGE, &[low_a, low_b, high_a, high_b])?;
+        }
+        Ok(())
+    }
+
+    fn target_range(&self) -> Option<(u16, u16)> {
+        let [low_a, low_b, high_a, high_b]: [u8; 4] = self.blob(TARGET_RANGE).try_into().ok()?;
+        Some((
+            u16::from_le_bytes([low_a, low_b]),
+            u16::from_le_bytes([high_a, high_b]),
+        ))
+    }
+
+    pub fn key(&self) -> Option<[u8; KEY_SIZE]> {
+        self.blob(KEY).try_into().ok()
+    }
+
+    pub fn set_key(&mut self, key: &[u8; KEY_SIZE]) -> Result<()> {
+        self.nvs.set_blob(KEY, key)?;
+        Ok(())
+    }
+
+    pub fn clear_key(&mut self) -> Result<()> {
+        self.nvs.remove(KEY)?;
+        Ok(())
+    }
+
+    /// the sensor this device paired with, so old sensors nearby are ignored.
+    pub fn address(&self) -> Option<[u8; 6]> {
+        self.blob(ADDRESS).try_into().ok()
+    }
+
+    pub fn set_address(&mut self, address: &[u8; 6]) -> Result<()> {
+        self.nvs.set_blob(ADDRESS, address)?;
+        Ok(())
+    }
+
+    pub fn clear_address(&mut self) -> Result<()> {
+        self.nvs.remove(ADDRESS)?;
+        Ok(())
+    }
+}

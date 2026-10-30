@@ -1,0 +1,11 @@
+[project]
+name = "nanodrip-e2e"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["cryptography>=44", "pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/e2e"]
+
+[tool.uv]
+package = false
