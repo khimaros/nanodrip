@@ -14,6 +14,8 @@
   --grid: #e4e3df;
   --band: #2a78d614;
   --series: #2a78d6;
+  --low: #b7791f;
+  --high: #c2412d;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -24,6 +26,8 @@
     --grid: #33332f;
     --band: #3987e51f;
     --series: #3987e5;
+    --low: #c0851f;
+    --high: #e0654f;
   }
 }
 * { box-sizing: border-box; }
@@ -34,24 +38,28 @@ body {
 }
 header { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); }
 h1 { margin: 0; font-size: 1rem; font-weight: 600; color: var(--text); }
-#hero { margin: 1.25rem 0; }
+#hero { margin: 1rem 0 1.25rem; }
 #value { font-size: 4rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 #unit, #detail { color: var(--muted); }
 #detail { margin-top: .35rem; }
 #stale { font-weight: 600; color: var(--text); }
-nav { display: flex; gap: .4rem; margin-bottom: .5rem; }
+nav { display: flex; gap: .4rem; }
 button {
   font: inherit; color: var(--muted); background: none; cursor: pointer;
   border: 1px solid var(--grid); border-radius: 6px; padding: .2rem .65rem;
 }
 button[aria-pressed="true"] { color: var(--text); border-color: var(--muted); }
 #plot { position: relative; }
-svg { display: block; width: 100%; height: 280px; touch-action: none; }
+svg { display: block; width: 100%; height: 320px; touch-action: none; }
 .grid { stroke: var(--grid); stroke-width: 1; }
 .axis { fill: var(--muted); font-size: 12px; }
 .band { fill: var(--band); }
 .line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line.below { stroke: var(--low); }
+.line.above { stroke: var(--high); }
 .point { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.point.below { fill: var(--low); }
+.point.above { fill: var(--high); }
 .cross { stroke: var(--muted); stroke-width: 1; }
 #tip {
   position: absolute; top: 0; pointer-events: none; display: none; white-space: nowrap;
@@ -59,50 +67,111 @@ svg { display: block; width: 100%; height: 280px; touch-action: none; }
   padding: .2rem .5rem; font-size: 13px;
 }
 details { margin-top: 1rem; color: var(--muted); }
+#settings > details { margin: .6rem 0 0 1rem; }
+summary { cursor: pointer; }
 table { width: 100%; border-collapse: collapse; margin-top: .5rem; color: var(--text); font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: .2rem .5rem .2rem 0; border-bottom: 1px solid var(--grid); }
 th { color: var(--muted); font-weight: 500; }
 footer { margin-top: 1.25rem; color: var(--muted); font-size: 13px; }
 form { display: grid; gap: .5rem; margin-top: .5rem; max-width: 30rem; color: var(--text); }
 label { display: grid; gap: .15rem; color: var(--muted); }
-input, textarea {
+input {
   font: inherit; color: var(--text); background: none; width: 100%;
   border: 1px solid var(--grid); border-radius: 6px; padding: .3rem .5rem;
 }
-textarea { font-family: monospace; font-size: 12px; height: 3.2rem; }
+select {
+  font: inherit; color: var(--text); background: none; min-width: 0; flex: 0 1 auto;
+  border: 1px solid var(--grid); border-radius: 6px; padding: .2rem .4rem;
+}
+select option { color: #0b0b0b; }
 #sensor-status, #wifi-status, #target-status, #mqtt-status { color: var(--text); margin-top: .5rem; }
-#totals { display: flex; flex-wrap: wrap; gap: .5rem 2rem; margin: .75rem 0; }
-#selection { display: flex; align-items: center; gap: .6rem; min-height: 1.9rem; color: var(--muted); font-size: 13px; }
+#controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .4rem 1rem; margin-bottom: .6rem; }
+#selection { display: flex; align-items: center; gap: .6rem; color: var(--muted); font-size: 13px; }
+#zoom-hint { opacity: .8; }
+#zoom-hint[hidden] { display: none; }
 .selecting { fill: var(--muted); opacity: .2; }
 #chart { cursor: crosshair; user-select: none; }
+#totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem 1.5rem; margin: 1.25rem 0 .5rem; }
 #totals dt { color: var(--muted); }
 #totals dd { margin: 0; font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.key { display: inline-block; width: .65rem; height: .65rem; border-radius: 3px; margin-right: .35rem; }
+.key.below, #bar .below { background: var(--low); }
+.key.within, #bar .within { background: var(--series); }
+.key.above, #bar .above { background: var(--high); }
+#bar { display: flex; gap: 2px; height: 10px; margin-bottom: 1.5rem; }
+#bar i { flex: 0 1 0; min-width: 0; border-radius: 4px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem 1.5rem; margin: 0; }
+.stats dt { color: var(--muted); }
+.stats dd { margin: 0; font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.stats small { color: var(--muted); font-size: 12px; }
+details .stats { margin-top: .6rem; }
+#profile-row { display: flex; align-items: center; gap: .5rem; color: var(--muted); margin: .5rem 0 .2rem; white-space: nowrap; }
+#goals { margin-top: 0; }
+#goals th:last-child, #goals td:last-child { text-align: right; padding-right: 0; }
+.missed { font-weight: 600; }
+#goal-note { color: var(--muted); font-size: 12px; margin: .4rem 0 0; }
+#goals a, #goal-note a, .stats a, #source a { color: inherit; }
+#source {
+  position: absolute; z-index: 2; max-width: min(24rem, calc(100vw - 16px)); padding: .5rem .65rem;
+  background: var(--surface); color: var(--text); border: 1px solid var(--muted); border-radius: 6px; font-size: 13px;
+}
+#source[hidden] { display: none; }
 .actions { display: flex; gap: .4rem; }
+@media (max-width: 500px) {
+  #totals dd { font-size: 1rem; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
 </style>
 </head>
 <body>
 <header><h1>nanodrip</h1><span id="device"></span></header>
 <section id="hero">
-  <span id="value">--</span> <span id="unit">mg/dl</span>
+  <span id="value">--</span> <span id="unit">mg/dL</span>
   <div id="detail">waiting for the first reading</div>
 </section>
-<nav id="ranges"></nav>
-<div id="selection"><span id="selection-label"></span>
-  <button id="clear-selection" hidden>show full range</button></div>
-<dl id="totals">
-  <div><dt>mean</dt><dd id="mean">--</dd></div>
-  <div><dt id="above-label">time above</dt><dd id="above">--</dd></div>
-  <div><dt id="below-label">time below</dt><dd id="below">--</dd></div>
-</dl>
+<div id="controls">
+  <nav id="ranges"></nav>
+  <div id="selection"><span id="selection-label"></span><span id="zoom-hint">drag on the chart to zoom</span>
+    <button id="clear-selection" hidden>show full range</button></div>
+</div>
 <div id="plot">
-  <svg id="chart" role="img" aria-label="glucose over time, in mg/dl"></svg>
+  <svg id="chart" role="img" aria-label="glucose over time, in mg/dL"></svg>
   <div id="tip"></div>
 </div>
+<dl id="totals">
+  <div><dt><i class="key below"></i><span id="below-label">below</span></dt><dd id="below">--</dd></div>
+  <div><dt><i class="key within"></i><span id="within-label">in range</span></dt><dd id="within">--</dd></div>
+  <div><dt><i class="key above"></i><span id="above-label">above</span></dt><dd id="above">--</dd></div>
+</dl>
+<div id="bar" aria-hidden="true"><i id="bar-below" class="below"></i><i id="bar-within" class="within"></i><i id="bar-above" class="above"></i></div>
+<dl class="stats">
+  <div><dt>mean</dt><dd id="mean">--</dd><small>weighted by time</small></div>
+  <div><dt>estimated A1C (GMI)</dt><dd id="gmi">--</dd><small id="gmi-note"></small></div>
+  <div><dt>lowest</dt><dd id="lowest">--</dd><small id="lowest-note"></small></div>
+  <div><dt>highest</dt><dd id="highest">--</dd><small id="highest-note"></small></div>
+  <div><dt>low episodes</dt><dd id="lows">--</dd><small id="lows-note"></small></div>
+  <div><dt>high episodes</dt><dd id="highs">--</dd><small id="highs-note"></small></div>
+</dl>
+<details id="targets">
+  <summary>targets</summary>
+  <label id="profile-row">targets for <select id="profile"></select></label>
+  <table id="goals"><thead><tr><th>measure</th><th>you</th><th id="goal-target">target</th><th>result</th></tr></thead>
+  <tbody id="goal-rows"></tbody></table>
+  <p id="goal-note"></p>
+</details>
 <details>
-  <summary>readings table</summary>
-  <table><thead><tr><th>time</th><th>mg/dl</th><th>trend</th><th>sensor state</th><th>source</th></tr></thead>
+  <summary>more statistics</summary>
+  <dl class="stats">
+    <div><dt>standard deviation</dt><dd id="sd">--</dd><small id="sd-note"></small></div>
+  </dl>
+</details>
+<details>
+  <summary>readings</summary>
+  <table><thead><tr><th>time</th><th>mg/dL</th><th>trend</th><th>sensor state</th><th>source</th></tr></thead>
   <tbody id="rows"></tbody></table>
 </details>
+<details id="settings">
+<summary>settings</summary>
 <details id="sensor">
   <summary>sensor pairing</summary>
   <div id="sensor-status"></div>
@@ -114,19 +183,13 @@ textarea { font-family: monospace; font-size: 12px; height: 3.2rem; }
       <button type="button" id="forget">forget sensor</button>
     </div>
   </form>
-  <form id="cert-form">
-    <label>certificate part 1 (keks_p1)<textarea id="p1" required></textarea></label>
-    <label>certificate part 2 (keks_p2)<textarea id="p2" required></textarea></label>
-    <label>private key (keks_p3)<textarea id="p3" required></textarea></label>
-    <div class="actions"><button type="submit">save certificates</button></div>
-  </form>
 </details>
 <details id="range">
   <summary>target range</summary>
   <div id="target-status"></div>
   <form id="target-form">
-    <label>low (mg/dl)<input id="target-low" type="number" min="40" max="400" required></label>
-    <label>high (mg/dl)<input id="target-high" type="number" min="40" max="400" required></label>
+    <label>low (mg/dL)<input id="target-low" type="number" min="40" max="400" required></label>
+    <label>high (mg/dL)<input id="target-high" type="number" min="40" max="400" required></label>
     <div class="actions"><button type="submit">save range</button></div>
   </form>
 </details>
@@ -149,30 +212,127 @@ textarea { font-family: monospace; font-size: 12px; height: 3.2rem; }
     <div class="actions"><button type="submit">save network</button></div>
   </form>
 </details>
+</details>
+<div id="source" hidden></div>
 <footer>experimental. do not use for treatment decisions.</footer>
 <script>
 const REFRESH_MS = 30000
 const STALE_SECONDS = 1200
 const TABLE_ROWS = 50
-const READINGS_PER_HOUR = 12
 const MIN_DRAG_PIXELS = 8
 const NARROW_WIDTH = 500
-const RANGES = [["3h", 3], ["24h", 24], ["7d", 168]]
+const DEFAULT_HOURS = 24
+const ALL_HISTORY = null
+const RANGES = [["3h", 3], ["12h", 12], ["24h", 24], ["7d", 168], ["max", ALL_HISTORY]]
+const CHART_PADDING = 10
+const EPISODE_SECONDS = 900
+const FULL_DAYS = 14
+const MIN_CAPTURED = 70
+const STABLE_CV = 36
+const READING_SECONDS = 300
+const MAX_HOLD_SECONDS = 900
+const OK_STATE = 6
+const DEFAULT_PROFILE = "typical"
+const CONSENSUS = "international consensus on time in range (Battelino 2019)"
+/// [label, address, what the source says].
+const SOURCES = {
+  battelino: ["Battelino 2019", "https://doi.org/10.2337/dci19-0028",
+    "international consensus on CGM cutpoints: time in, below and above range for each group, from 14 days of data with 70% captured."],
+  shah: ["Shah 2019", "https://pmc.ncbi.nlm.nih.gov/articles/PMC7296129/",
+    "153 healthy people wore a blinded Dexcom G6 for up to 10 days: median 96% of time in 70 to 140, mean glucose 99, CV 17%."],
+  carlson: ["Carlson 2024", "https://doi.org/10.1136/bmjdrc-2023-003989",
+    "413 uncomplicated pregnancies on Dexcom G6: mean glucose 98, 86% of time in 63 to 120, nearly stable across trimesters."],
+  durnwald: ["Durnwald 2024", "https://doi.org/10.2337/dc23-2149",
+    "768 pregnancies followed from before 17 weeks: those without gestational diabetes had a mean of 100 and 84 +/- 8% of time in 63 to 120."],
+  pearls: ["ADA clinical pearls 2025", "https://professional.diabetes.org/sites/dpro/files/2025-06/DexcomClinicalPearls_FINAL.pdf",
+    "expert cases on CGM in pregnancy: one author suggests 95% of time in 63 to 140 and a mean under 100 for gestational diabetes, if achievable without lows."],
+  review: ["CGM in pregnancy review", "https://pmc.ncbi.nlm.nih.gov/articles/PMC12075183/",
+    "practical guide to CGM in pregnancy: repeats the type 1 targets, gives a suggested mean of 115 to 120, and notes it is not formally established."],
+  monnier: ["Monnier 2017", "https://serval.unil.ch/notice/serval:BIB_819F459AE3EF",
+    "a CV of 36% separates stable from unstable glucose: lows rose significantly above it, especially with insulin."],
+  bergenstal: ["Bergenstal 2018", "https://pmc.ncbi.nlm.nih.gov/articles/PMC6196826/",
+    "GMI estimates A1C from mean CGM glucose: 3.31 + 0.02392 x mean, best from 10 to 14 days of data."],
+}
+const typicalBetween = (lo, hi) => value => value >= lo && value <= hi ? "typical" : "outside typical"
+const againstMedian = median => value => value > median ? "above median" : value < median ? "below median" : "at median"
+const noTarget = () => "no target"
+const suggestedBelow = limit => value => value < limit ? "meets suggestion" : "misses suggestion"
+const suggestedAbove = limit => value => value > limit ? "meets suggestion" : "misses suggestion"
+const suggestedBetween = (lo, hi) => value =>
+  value < lo ? "below suggestion" : value > hi ? "above suggestion" : "meets suggestion"
+/// published cutpoints and goals. rows are [name, test, goal, shown value, soft
+/// check, source]: a goal earns met or not met, a soft check only says how the
+/// value compares, as typical values and suggestions are not targets.
+const PROFILES = {
+  typical: {label: "no diabetes", low: 70, high: 140, typical: true, source: "shah", typicalCv: "17 +/- 3%",
+    typicalMean: "99 +/- 7", meanCheck: typicalBetween(92, 106), cvCheck: typicalBetween(14, 20),
+    note: "not targets: median and middle half of 153 healthy people (Shah 2019). lows are more common in the first 48 hours of wear.",
+    rows: [["70 to 140", g => g >= 70 && g <= 140, null, "96% (93 to 98)", typicalBetween(93, 98)],
+      ["below 70", g => g < 70, null, "1.1% (0.3 to 2.9)", typicalBetween(0.3, 2.9)],
+      ["below 54", g => g < 54, null, "0% (0 to 0.2)", typicalBetween(0, 0.2)],
+      ["above 140", g => g > 140, null, "2.1% (0.9 to 3.9)", typicalBetween(0.9, 3.9)],
+      ["above 180", g => g > 180, null, "0% (0 to 0.2)", typicalBetween(0, 0.2)]]},
+  diabetes: {label: "type 1 or type 2 diabetes", low: 70, high: 180, source: "battelino", cv: STABLE_CV,
+    note: `${CONSENSUS}, for personal adjustment with a clinician. under 25 with an A1C goal of 7.5%: about 60% in range.`,
+    rows: [["70 to 180", g => g >= 70 && g <= 180, [">", 70]],
+      ["below 70", g => g < 70, ["<", 4]],
+      ["below 54", g => g < 54, ["<", 1]],
+      ["above 180", g => g > 180, ["<", 25]],
+      ["above 250", g => g > 250, ["<", 5]]]},
+  older: {label: "older or high risk", low: 70, high: 180, source: "battelino", cv: STABLE_CV,
+    note: `${CONSENSUS}. these goals favour avoiding lows.`,
+    rows: [["70 to 180", g => g >= 70 && g <= 180, [">", 50]],
+      ["below 70", g => g < 70, ["<", 1]],
+      ["above 250", g => g > 250, ["<", 10]]]},
+  pregnant: {label: "pregnancy without diabetes", low: 63, high: 140, typical: true, source: "carlson",
+    typicalMean: "98 +/- 7", meanCheck: typicalBetween(91, 105),
+    note: "not targets: 413 uncomplicated pregnancies (Carlson 2024) and 710 without gestational diabetes (Durnwald 2024). where only a median is published, the result says which side of it you are on.",
+    rows: [["63 to 140", g => g >= 63 && g <= 140, null, "95%", againstMedian(95), "pearls"],
+      ["63 to 120", g => g >= 63 && g <= 120, null, "84 +/- 8%", typicalBetween(76, 92), "durnwald"],
+      ["below 63", g => g < 63, null, "1.8%", againstMedian(1.8)],
+      ["above 140", g => g > 140, null, "2.5%", againstMedian(2.5)]]},
+  pregnancy: {label: "pregnancy with type 1 diabetes", low: 63, high: 140, source: "battelino", cv: STABLE_CV,
+    typicalMean: "115 to 120 suggested", meanCheck: suggestedBetween(115, 120), meanSource: "review",
+    note: `${CONSENSUS}. based on limited evidence. premeal and after-meal targets still apply. the mean is a suggestion (Murphy 2019), not formally established.`,
+    rows: [["63 to 140", g => g >= 63 && g <= 140, [">", 70]],
+      ["below 63", g => g < 63, ["<", 4]],
+      ["below 54", g => g < 54, ["<", 1]],
+      ["above 140", g => g > 140, ["<", 25]]]},
+  gestational: {label: "pregnancy with type 2 or gestational diabetes", low: 63, high: 140, source: "battelino",
+    cv: STABLE_CV, typicalMean: "under 100 suggested", meanCheck: suggestedBelow(100), meanSource: "pearls",
+    note: `no agreed percentages: ${CONSENSUS} gives only this range. the figures shown are one expert's suggestion for gestational diabetes (ADA clinical pearls 2025), and <4% is the type 1 target.`,
+    rows: [["63 to 140", g => g >= 63 && g <= 140, null, "95% suggested", suggestedAbove(95), "pearls"],
+      ["below 63", g => g < 63, null, "<4% for type 1", suggestedBelow(4)],
+      ["below 54", g => g < 54, null, "<1% for type 1", suggestedBelow(1)],
+      ["above 140", g => g > 140, null, "none agreed", noTarget]]},
+  own: {label: "my own range", note: "your range from settings. no published goals apply to it.", rows: []},
+}
 const MARGIN = {top: 12, right: 12, bottom: 24, left: 38}
 const STATES = {1: "stopped", 2: "warming up", 6: "ok", 7: "needs calibration", 15: "ended", 24: "expired"}
 const svgNs = "http://www.w3.org/2000/svg"
 const $ = id => document.getElementById(id)
 
-let hours = 24
+let hours = DEFAULT_HOURS
 let readings = []
 let target = [63, 140]
+let deviceTarget = target
+let shownSource = null
 let selection = null
+let profile = PROFILES[localStorage.getItem("profile")] ? localStorage.getItem("profile") : DEFAULT_PROFILE
+
+$("profile").append(...Object.entries(PROFILES).map(([key, entry]) => new Option(entry.label, key)))
+$("profile").value = profile
+$("profile").onchange = event => {
+  profile = event.target.value
+  localStorage.setItem("profile", profile)
+  renderChart()
+}
 
 const stateName = s => STATES[s] || `state ${s}`
 const clockTime = t => new Date(t * 1000).toLocaleString([], {
   month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"})
 const trendText = t => t === null ? "unknown" :
-  `${t > 0 ? "+" : ""}${t.toFixed(1)} mg/dl/min`
+  `${t > 0 ? "+" : ""}${t.toFixed(1)} mg/dL/min`
 const ageText = s => s < 90 ? `${Math.round(s)} s ago` :
   s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`
 
@@ -184,7 +344,7 @@ function element(name, attrs, text) {
 }
 
 function ticks(lo, hi, count) {
-  const step = [20, 50, 100, 200].find(s => (hi - lo) / s <= count) || 200
+  const step = [10, 20, 50, 100, 200].find(s => (hi - lo) / s <= count) || 200
   const out = []
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(v)
   return out
@@ -207,7 +367,7 @@ function renderSensor(status) {
     status.certificates ? "certificates saved" : "certificates missing"]
   if (status.last_error) lines.push(ERRORS[status.last_error] || status.last_error)
   $("sensor-status").textContent = lines.join(" / ")
-  if (!status.paired) $("sensor").open = true
+  if (!status.paired) $("settings").open = $("sensor").open = true
   $("wifi-status").textContent = status.wifi_ssid ? `network: ${status.wifi_ssid}` : "hosting setup network"
 }
 
@@ -221,14 +381,9 @@ async function post(path, fields) {
 
 $("pair-form").onsubmit = event => {
   event.preventDefault()
-  if (confirm("pairing a new sensor clears the history on this device. continue?")) {
+  if (confirm("pair a new sensor? the history on this device is kept.")) {
     post("/api/pair", {code: $("code").value.trim()})
   }
-}
-$("cert-form").onsubmit = async event => {
-  event.preventDefault()
-  const fields = {p1: $("p1").value, p2: $("p2").value, p3: $("p3").value}
-  if (await post("/api/certificates", fields)) $("cert-form").reset()
 }
 $("target-form").onsubmit = async event => {
   event.preventDefault()
@@ -243,17 +398,105 @@ function duration(seconds) {
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
-function renderTotals(summary) {
-  const covered = summary.above_seconds + summary.below_seconds + summary.in_range_seconds
-  const show = (id, seconds) => {
-    const share = covered ? ` (${Math.round(seconds / covered * 100)}%)` : ""
-    $(id).textContent = covered ? duration(seconds) + share : "--"
+/// a share that never rounds a small amount away, or a near total up to all.
+function percent(share) {
+  if (share > 0 && share < 1) return "<1%"
+  if (share > 99 && share < 100) return ">99%"
+  return `${Math.round(share)}%`
+}
+
+function spanText(seconds) {
+  return seconds >= 2 * 86400 ? `${(seconds / 86400).toFixed(1)} days` : duration(seconds)
+}
+
+function goalMet(value, goal) {
+  return goal[0] === ">" ? value > goal[1] : value < goal[1]
+}
+
+const metText = met => met ? "met" : "not met"
+
+/// shows what a source says beside the link, which then opens the source itself.
+function showSource(link, [label, url, snippet]) {
+  const box = $("source")
+  box.replaceChildren(Object.assign(document.createElement("strong"), {textContent: label}), ` ${snippet} `,
+    Object.assign(document.createElement("a"), {href: url, target: "_blank", rel: "noopener",
+      textContent: "open source"}))
+  box.hidden = false
+  const place = link.getBoundingClientRect()
+  box.style.top = `${place.bottom + scrollY + 4}px`
+  box.style.left = `${Math.max(8, Math.min(place.left, innerWidth - box.offsetWidth - 8))}px`
+  shownSource = link
+}
+
+function sourceLink(source, text) {
+  const link = document.createElement("a")
+  link.href = source[1]
+  link.target = "_blank"
+  link.rel = "noopener"
+  link.textContent = text
+  link.onclick = event => {
+    if (shownSource?.href === link.href && shownSource?.textContent === text) return
+    event.preventDefault()
+    event.stopPropagation()
+    showSource(link, source)
   }
-  show("above", summary.above_seconds)
-  show("below", summary.below_seconds)
-  $("mean").textContent = summary.mean === null ? "--" : `${Math.round(summary.mean)} mg/dl`
-  $("above-label").textContent = `time above ${target[1]}`
-  $("below-label").textContent = `time below ${target[0]}`
+  return link
+}
+
+document.addEventListener("click", event => {
+  if (!$("source").contains(event.target)) {
+    $("source").hidden = true
+    shownSource = null
+  }
+})
+
+function goalRow(cells, status, source) {
+  const row = document.createElement("tr")
+  cells.forEach((value, at) => {
+    const cell = document.createElement("td")
+    const cited = source && at === cells.length - 1
+    cell.append(cited ? sourceLink(SOURCES[source], value) : value)
+    row.append(cell)
+  })
+  const cell = document.createElement("td")
+  cell.textContent = status
+  cell.className = status === "not met" ? "missed" : ""
+  row.append(cell)
+  return row
+}
+
+function renderGoals(points, mean, cv, days, captured) {
+  const active = PROFILES[profile]
+  const cited = new Set()
+  const row = (cells, status, source) => {
+    if (source) cited.add(source)
+    return goalRow(cells, status, source)
+  }
+  const rows = active.rows.map(([name, test, goal, shown, check, source = active.source]) => {
+    const share = points.filter(p => test(p.glucose)).length / points.length * 100
+    return goal ? row([name, percent(share), `${goal[0]}${goal[1]}%`], metText(goalMet(share, goal)), source)
+      : row([name, percent(share), shown], check(share), source)
+  })
+  if (active.typicalMean) {
+    rows.push(row(["mean glucose", `${mean} mg/dL`, active.typicalMean], active.meanCheck(mean),
+      active.meanSource || active.source))
+  }
+  if (active.cv) rows.push(row(["variability (CV)", `${cv}%`, `<${active.cv}%`], metText(cv < active.cv), "monnier"))
+  else if (active.typicalCv) {
+    rows.push(row(["variability (CV)", `${cv}%`, active.typicalCv], active.cvCheck(cv), active.source))
+  }
+  rows.push(row(["days of data", days.toFixed(1), `${FULL_DAYS} or more`], metText(days >= FULL_DAYS), "battelino"))
+  rows.push(row(["readings captured", percent(captured), `>${MIN_CAPTURED}%`], metText(captured > MIN_CAPTURED), "battelino"))
+  $("goal-rows").replaceChildren(...rows)
+  $("goal-target").textContent = active.typical ? "typical" : "target"
+  $("goal-note").textContent = active.note
+  const list = document.createElement("div")
+  list.append("sources: ")
+  ;[...cited].forEach((key, at) => {
+    if (at) list.append(", ")
+    list.append(sourceLink(SOURCES[key], SOURCES[key][0]))
+  })
+  $("goal-note").append(list)
 }
 
 $("mqtt-form").onsubmit = async event => {
@@ -276,11 +519,11 @@ function renderMqtt(status) {
 }
 
 function renderTarget(status) {
-  target = [status.target_low, status.target_high]
-  $("target-status").textContent = `target ${target[0]} to ${target[1]} mg/dl`
+  deviceTarget = [status.target_low, status.target_high]
+  $("target-status").textContent = `${deviceTarget[0]} to ${deviceTarget[1]} mg/dL, used by "my own range"`
   if (document.activeElement !== $("target-low") && document.activeElement !== $("target-high")) {
-    $("target-low").value = target[0]
-    $("target-high").value = target[1]
+    $("target-low").value = deviceTarget[0]
+    $("target-high").value = deviceTarget[1]
   }
 }
 
@@ -293,7 +536,7 @@ $("wifi-form").onsubmit = async event => {
   }
 }
 $("forget").onclick = () => {
-  if (confirm("forget this sensor and clear the history on this device?")) post("/api/forget", {})
+  if (confirm("forget this sensor? the history on this device is kept.")) post("/api/forget", {})
 }
 
 function renderHero(status) {
@@ -304,7 +547,8 @@ function renderHero(status) {
   const age = latest.time === null ? null : Date.now() / 1000 - latest.time
   const stale = age !== null && age > STALE_SECONDS
   $("value").textContent = latest.glucose === null || stale ? "--" : latest.glucose
-  const parts = [stateName(latest.state), trendText(latest.trend)]
+  const parts = [trendText(latest.trend)]
+  if (latest.state !== OK_STATE) parts.unshift(stateName(latest.state))
   if (age !== null) parts.push(ageText(age))
   $("detail").textContent = parts.join(" / ")
   if (stale) {
@@ -315,23 +559,105 @@ function renderHero(status) {
   }
 }
 
+/// where the chart begins: the oldest reading for all history, so nothing is
+/// drawn empty, or the default span while there is no reading to go by.
+function rangeStart(end) {
+  if (hours !== ALL_HISTORY) return end - hours * 3600
+  const oldest = readings.find(r => r.time !== null && r.time < end)
+  return oldest ? oldest.time : end - DEFAULT_HOURS * 3600
+}
+
+/// separate stretches outside the target that lasted long enough to count.
+function episodes(points, outside) {
+  let count = 0, began = null, last = null
+  const close = () => { if (began !== null && last - began >= EPISODE_SECONDS) count++ }
+  for (const p of points) {
+    if (outside(p.glucose) && (last === null || p.time - last <= STALE_SECONDS)) {
+      began ??= p.time
+      last = p.time
+    } else {
+      close()
+      began = null
+      last = null
+    }
+  }
+  close()
+  return count
+}
+
+/// an empty window says so, rather than leaving the last window's figures up.
+function clearStats() {
+  for (const id of ["below", "within", "above", "mean", "gmi", "sd", "lowest", "highest", "lows", "highs"]) {
+    $(id).textContent = "--"
+  }
+  for (const id of ["gmi-note", "sd-note", "lowest-note", "highest-note", "lows-note", "highs-note", "goal-note"]) {
+    $(id).textContent = ""
+  }
+  for (const id of ["bar-below", "bar-within", "bar-above"]) $(id).style.flexGrow = 0
+  $("goal-rows").replaceChildren()
+}
+
+function renderStats(points, start, end) {
+  const values = points.map(p => p.glucose)
+  const show = (id, value, note) => {
+    $(id).textContent = value
+    $(`${id}-note`).textContent = note
+  }
+  $("selection-label").textContent = `${clockTime(start)} to ${clockTime(end)}, ${spanText(end - start)}`
+  $("zoom-hint").hidden = !!selection
+  if (!values.length) return clearStats()
+  const mean = values.reduce((a, b) => a + b, 0) / values.length
+  const sd = Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length)
+  const days = (points[points.length - 1].time - points[0].time) / 86400
+  const lowest = points.reduce((a, b) => b.glucose < a.glucose ? b : a)
+  const highest = points.reduce((a, b) => b.glucose > a.glucose ? b : a)
+  const expected = Math.max(1, (end - start) / READING_SECONDS)
+  const band = (id, label, test) => {
+    const count = values.filter(test).length
+    $(id).textContent = `${duration(count * READING_SECONDS)} (${percent(count / values.length * 100)})`
+    $(`bar-${id}`).style.flexGrow = count
+    $(`${id}-label`).textContent = label
+  }
+  const held = points.map((p, at) =>
+    Math.min(MAX_HOLD_SECONDS, (points[at + 1]?.time ?? p.time + READING_SECONDS) - p.time))
+  const weighted = points.reduce((sum, p, at) => sum + p.glucose * held[at], 0)
+  $("mean").textContent = `${Math.round(weighted / held.reduce((a, b) => a + b, 0))} mg/dL`
+  band("below", `below ${target[0]}`, v => v < target[0])
+  band("within", `${target[0]} to ${target[1]}`, v => v >= target[0] && v <= target[1])
+  band("above", `above ${target[1]}`, v => v > target[1])
+  show("gmi", `${(3.31 + 0.02392 * mean).toFixed(1)}%`,
+    days < FULL_DAYS ? `rough: ${days.toFixed(1)} of ${FULL_DAYS} days` : "from the mean")
+  $("gmi-note").append(" (", sourceLink(SOURCES.bergenstal, SOURCES.bergenstal[0]), ")")
+  show("sd", `${Math.round(sd)} mg/dL`, "typical swing around the mean")
+  show("lowest", `${lowest.glucose} mg/dL`, clockTime(lowest.time))
+  show("highest", `${highest.glucose} mg/dL`, clockTime(highest.time))
+  show("lows", episodes(points, v => v < target[0]), "15 minutes or longer")
+  show("highs", episodes(points, v => v > target[1]), "15 minutes or longer")
+  renderGoals(points, Math.round(mean), Math.round(sd / mean * 100), days,
+    Math.min(100, points.length / expected * 100))
+}
+
 function renderChart() {
+  const active = PROFILES[profile]
+  target = active.low ? [active.low, active.high] : deviceTarget
   const svg = $("chart")
   svg.replaceChildren()
   const width = svg.clientWidth, height = svg.clientHeight
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`)
   const end = selection ? selection.end : Date.now() / 1000
-  const start = selection ? selection.start : end - hours * 3600
+  const start = selection ? selection.start : rangeStart(end)
   const points = readings.filter(r => r.time !== null && r.glucose !== null
     && r.time >= start && r.time <= end)
   const values = points.map(p => p.glucose)
-  const lo = Math.min(50, ...values), hi = Math.max(250, ...values)
+  renderStats(points, start, end)
+  const lo = Math.max(0, Math.min(target[0], ...values) - CHART_PADDING)
+  const hi = Math.max(target[1], ...values) + CHART_PADDING
   const x = t => MARGIN.left + (t - start) / (end - start) * (width - MARGIN.left - MARGIN.right)
   const y = v => height - MARGIN.bottom - (v - lo) / (hi - lo) * (height - MARGIN.top - MARGIN.bottom)
   const bandTop = Math.min(y(target[1]), y(lo)), bandBottom = Math.min(y(target[0]), y(lo))
   svg.append(element("rect", {class: "band", x: MARGIN.left, y: bandTop,
     width: width - MARGIN.left - MARGIN.right, height: Math.max(0, bandBottom - bandTop)}))
-  for (const v of ticks(lo, hi, 5)) {
+  for (const v of ticks(lo, hi, 7)) {
     svg.append(element("line", {class: "grid", x1: MARGIN.left, x2: width - MARGIN.right, y1: y(v), y2: y(v)}))
     svg.append(element("text", {class: "axis", x: MARGIN.left - 6, y: y(v) + 4, "text-anchor": "end"}, v))
   }
@@ -340,7 +666,8 @@ function renderChart() {
     const t = start + (end - start) * i / spans
     const anchor = i === 0 ? "start" : i === spans ? "end" : "middle"
     svg.append(element("text", {class: "axis", x: x(t), y: height - 6, "text-anchor": anchor},
-      end - start > 86400 ? new Date(t * 1000).toLocaleDateString([], {month: "numeric", day: "numeric"})
+      end - start > 4 * 86400 ? new Date(t * 1000).toLocaleDateString([], {month: "numeric", day: "numeric"})
+        : end - start > 86400 ? new Date(t * 1000).toLocaleString([], {month: "numeric", day: "numeric", hour: "numeric"})
         : new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})))
   }
   let path = ""
@@ -348,10 +675,19 @@ function renderChart() {
     const gap = i === 0 || p.time - points[i - 1].time > STALE_SECONDS
     path += `${gap ? "M" : "L"}${x(p.time).toFixed(1)} ${y(p.glucose).toFixed(1)}`
   })
-  svg.append(element("path", {class: "line", d: path}))
+  const zones = {above: [0, y(target[1])], within: [y(target[1]), y(target[0])], below: [y(target[0]), height]}
+  const defs = element("defs")
+  svg.append(defs)
+  for (const [zone, [top, bottom]] of Object.entries(zones)) {
+    const clip = element("clipPath", {id: `zone-${zone}`})
+    clip.append(element("rect", {x: 0, y: top, width, height: Math.max(0, bottom - top)}))
+    defs.append(clip)
+    svg.append(element("path", {class: `line ${zone}`, d: path, "clip-path": `url(#zone-${zone})`}))
+  }
   if (points.length) {
     const last = points[points.length - 1]
-    svg.append(element("circle", {class: "point", cx: x(last.time), cy: y(last.glucose), r: 4}))
+    const zone = last.glucose > target[1] ? "above" : last.glucose < target[0] ? "below" : "within"
+    svg.append(element("circle", {class: `point ${zone}`, cx: x(last.time), cy: y(last.glucose), r: 4}))
   }
   const cross = element("line", {class: "cross", y1: MARGIN.top, y2: height - MARGIN.bottom, visibility: "hidden"})
   svg.append(cross)
@@ -377,7 +713,7 @@ function renderChart() {
     if (to - from >= MIN_DRAG_PIXELS) {
       selection = {start: timeAt(from), end: timeAt(to)}
       renderRanges()
-      refresh()
+      renderChart()
     }
   }
   svg.onpointermove = event => {
@@ -394,7 +730,7 @@ function renderChart() {
     cross.setAttribute("x2", x(near.time))
     cross.setAttribute("visibility", "visible")
     const tip = $("tip")
-    tip.textContent = `${near.glucose} mg/dl, ${clockTime(near.time)}`
+    tip.textContent = `${near.glucose} mg/dL, ${clockTime(near.time)}`
     tip.style.display = "block"
     tip.style.left = `${Math.min(x(near.time) + 8, width - tip.offsetWidth)}px`
   }
@@ -424,39 +760,22 @@ function renderRanges() {
     const button = document.createElement("button")
     button.textContent = label
     button.setAttribute("aria-pressed", !selection && value === hours)
-    button.onclick = () => { hours = value; selection = null; renderRanges(); refresh() }
+    button.onclick = () => { hours = value; selection = null; renderRanges(); renderChart() }
     return button
   }))
-  $("selection-label").textContent = selection
-    ? `${clockTime(selection.start)} to ${clockTime(selection.end)}, ${duration(selection.end - selection.start)}`
-    : "drag across the chart to select a range"
   $("clear-selection").hidden = !selection
 }
 
-$("clear-selection").onclick = () => { selection = null; renderRanges(); refresh() }
+$("clear-selection").onclick = () => { selection = null; renderRanges(); renderChart() }
 
-/// the sensor clock for a wall clock time, from the offset any reading gives.
-function clockFor(time) {
-  const known = readings.find(r => r.time !== null)
-  return known ? Math.round(time - (known.time - known.clock)) : 0
-}
-
-function summaryUrl() {
-  return selection
-    ? `/api/summary?from=${clockFor(selection.start)}&to=${clockFor(selection.end)}`
-    : `/api/summary?hours=${hours}`
-}
-
+/// history rarely changes, so it is held here and only fetched again when the
+/// device's count moves. requests go one at a time to go easy on the device.
 async function refresh() {
   try {
-    const [status, rows, summary] = await Promise.all([
-      fetch("/api/status").then(r => r.json()),
-      fetch(`/api/readings?limit=${hours * READINGS_PER_HOUR}`).then(r => r.json()),
-      fetch(summaryUrl()).then(r => r.json())])
-    readings = rows
+    const status = await fetch("/api/status").then(r => r.json())
+    if (status.count !== readings.length) readings = await fetch("/api/readings").then(r => r.json())
     renderTarget(status)
     renderMqtt(status)
-    renderTotals(summary)
     renderHero(status)
     renderChart()
     renderTable()

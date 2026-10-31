@@ -2,6 +2,7 @@
 //! write pacing and subscription order follow xdrip, as sensors are picky.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -12,12 +13,16 @@ use esp32_nimble::enums::{AuthReq, SecurityIOCap};
 use esp32_nimble::utilities::BleUuid;
 use esp32_nimble::{uuid128, BLEClient, BLEDevice, BLERemoteCharacteristic, BLEScan};
 use esp_idf_svc::hal::task::block_on;
-use nanodrip_app::{Feed, Settings};
+use esp_idf_svc::sys::{
+    esp_get_free_heap_size, esp_restart, esp_timer_get_time, heap_caps_get_free_size,
+    heap_caps_get_largest_free_block, MALLOC_CAP_INTERNAL,
+};
+use nanodrip_app::{Feed, Log, SensorName, Settings};
 use nanodrip_core::{Action, Channel, Session};
 use rand_core::OsRng;
 
 use crate::net::Network;
-use crate::persist::{History, Persist};
+use crate::persist::{LogFlash, Persist};
 
 const SERVICE: BleUuid = uuid128!("f8083532-849e-531c-c594-30f1f86a4ea5");
 const CONTROL: BleUuid = uuid128!("f8083534-849e-531c-c594-30f1f86a4ea5");
@@ -41,7 +46,39 @@ const DATA_IDLE: Duration = Duration::from_secs(3);
 const AFTER_SESSION: Duration = Duration::from_secs(60);
 const UNPAIRED_WAIT: Duration = Duration::from_secs(5);
 
+/// a session and a full walk back take a few minutes at most.
+const WATCHDOG_LIMIT_SECONDS: u32 = 600;
+const WATCHDOG_POLL: Duration = Duration::from_secs(30);
+const WATCHDOG_STACK: usize = 3072;
+
 type Event = (Channel, Vec<u8>);
+
+static LAST_CYCLE_SECONDS: AtomicU32 = AtomicU32::new(0);
+
+fn uptime_seconds() -> u32 {
+    (unsafe { esp_timer_get_time() } / 1_000_000) as u32
+}
+
+fn mark_alive() {
+    LAST_CYCLE_SECONDS.store(uptime_seconds(), Ordering::Relaxed);
+}
+
+/// restarts the board if the radio loop stops, since some BLE calls can wait
+/// forever. readings are saved after each session, and the sensor refills the rest.
+pub fn start_watchdog() -> Result<()> {
+    mark_alive();
+    std::thread::Builder::new()
+        .stack_size(WATCHDOG_STACK)
+        .spawn(|| loop {
+            sleep(WATCHDOG_POLL);
+            let silent = uptime_seconds() - LAST_CYCLE_SECONDS.load(Ordering::Relaxed);
+            if silent > WATCHDOG_LIMIT_SECONDS {
+                log::error!("radio loop silent for {silent} s, restarting");
+                unsafe { esp_restart() };
+            }
+        })?;
+    Ok(())
+}
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -144,7 +181,7 @@ pub struct Radio {
     pub ble: &'static mut BLEDevice,
     pub feed: Feed,
     pub persist: Persist,
-    pub history: History,
+    pub log: Log<LogFlash>,
     pub network: Network,
     pub generation: u32,
     pub saved: Settings,
@@ -161,8 +198,8 @@ impl Radio {
 
     /// a failed save loses nothing for now: the sensor can backfill the gap.
     fn save_history(&mut self) {
-        let changes = self.feed.take_history_changes();
-        if let Err(error) = self.history.save(changes) {
+        let changes = self.feed.take_unsaved();
+        if let Err(error) = self.log.save(changes) {
             log::error!("saving history failed: {error}");
         }
     }
@@ -184,13 +221,11 @@ impl Radio {
             self.persist.clear_key()?;
             self.persist.clear_address()?;
             self.ble.delete_all_bonds()?;
-            self.feed.reset_sensor();
-            self.save_history();
         }
         Ok(settings)
     }
 
-    async fn find_sensor(&mut self) -> Result<Option<esp32_nimble::BLEAddress>> {
+    async fn find_sensor(&mut self) -> Result<Option<(esp32_nimble::BLEAddress, SensorName)>> {
         let known = self.persist.address();
         let mut scan = BLEScan::new();
         let found = scan
@@ -199,17 +234,24 @@ impl Radio {
             .window(SCAN_WINDOW_MS)
             .start(self.ble, SCAN_MS, |device, data| {
                 let address = device.addr();
-                if known.is_some() {
-                    return (known == Some(address.as_be_bytes())).then_some(address);
+                let mut sensor_name = [0; 8];
+                let name = data.name();
+                if let Some(name) = &name {
+                    let size = name.len().min(sensor_name.len());
+                    sensor_name[..size].copy_from_slice(&name.as_bytes()[..size]);
                 }
-                let name = data.name()?;
+                if known.is_some() {
+                    let matched = known == Some(address.as_be_bytes());
+                    return matched.then_some((address, sensor_name));
+                }
+                let name = name?;
                 let matched = NAME_PREFIXES
                     .iter()
                     .any(|prefix| name.starts_with_str(prefix));
                 if matched {
                     log::info!("advertising sensor: {name} at {address:?}");
                 }
-                matched.then_some(address)
+                matched.then_some((address, sensor_name))
             })
             .await?;
         Ok(found)
@@ -241,6 +283,10 @@ impl Radio {
             }
             Action::Backfill(record) => {
                 self.feed.record_backfill(&record);
+            }
+            Action::HistoryExhausted => {
+                log::info!("no older history, oldest reading is {:?}", self.feed.oldest());
+                self.feed.history_exhausted();
             }
             Action::Fail(error) => {
                 log::warn!("session failed: {}", error.name());
@@ -282,6 +328,7 @@ impl Radio {
                     queue.extend(session.on_rx(&mut OsRng, channel, &data));
                 }
                 Err(RecvTimeoutError::Timeout) if last_activity.elapsed() > idle_limit => {
+                    last_activity = Instant::now();
                     queue.extend(session.on_idle());
                 }
                 Err(_) => {}
@@ -314,19 +361,32 @@ impl Radio {
             return Ok(UNPAIRED_WAIT);
         };
         config.saved_key = self.persist.key();
-        config.last_seen = self.feed.last_seen();
-        let Some(address) = self.find_sensor().await? else {
+        let Some((address, name)) = self.find_sensor().await? else {
             self.feed.set_error(Some("not-found"));
             return Ok(Duration::ZERO);
         };
         log::info!("sensor found");
         self.feed.set_error(None);
+        self.feed.select_sensor(address.as_be_bytes(), name);
+        config.last_seen = self.feed.last_seen();
+        config.oldest = self.feed.oldest();
         let mut session = Session::new(config);
         if let Err(error) = self.exchange(&address, &mut session).await {
             log::warn!("session ended: {error}");
             self.feed.set_error(Some("ble"));
         }
         Ok(AFTER_SESSION)
+    }
+
+    /// internal RAM is reported apart, as PSRAM would hide it running out.
+    fn report_memory(&self) {
+        let free = unsafe { esp_get_free_heap_size() } as usize;
+        let internal = unsafe { heap_caps_get_free_size(MALLOC_CAP_INTERNAL) };
+        let largest = unsafe { heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) };
+        log::info!("memory free {free}, internal {internal}, largest internal {largest}");
+        let shared = self.feed.shared();
+        shared.free_memory.store(free, Ordering::Relaxed);
+        shared.free_internal.store(internal, Ordering::Relaxed);
     }
 
     /// serves sensors forever.
@@ -340,6 +400,8 @@ impl Radio {
             self.save_history();
             self.feed.flush();
             self.network.ensure();
+            self.report_memory();
+            mark_alive();
             sleep(wait);
         }
     }

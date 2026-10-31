@@ -1,6 +1,6 @@
 //! turns session results into history and queued mqtt messages.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -8,7 +8,7 @@ use nanodrip_core::{BackfillRecord, Reading};
 
 use crate::mqtt::{Connection, Message};
 use crate::settings::{MqttConfig, Settings};
-use crate::store::{slot_of, Entry, Store};
+use crate::store::{Entry, SensorId, SensorName, Store};
 
 /// one day at the five minute cadence; older unsent values are dropped.
 const MAX_PENDING: usize = 288;
@@ -21,23 +21,27 @@ pub struct Shared {
     pub device: String,
     pub store: Mutex<Store>,
     pub pending: AtomicUsize,
+    pub free_memory: AtomicUsize,
+    pub free_internal: AtomicUsize,
     pub settings: Mutex<Settings>,
     pub last_error: Mutex<Option<&'static str>>,
 }
 
-/// what a host must do to its saved history to match the store.
-#[derive(Default)]
-pub struct HistoryChanges {
-    pub clear: bool,
-    pub slots: Vec<(u16, Vec<u8>)>,
+/// a reading the host has yet to save, with the sensor details stored with it.
+pub struct Logged {
+    pub entry: Entry,
+    pub name: SensorName,
+    pub base: u32,
 }
 
 pub struct Feed {
     shared: Arc<Shared>,
     queue: VecDeque<Message>,
-    clock_offset: Option<u64>,
-    dirty_slots: BTreeSet<u16>,
-    history_cleared: bool,
+    sensor: SensorId,
+    unsaved: Vec<Entry>,
+    /// the sensor had nothing before this reading. kept in memory only, since
+    /// finding out again after a reboot costs one empty request.
+    history_floor: Option<(SensorId, u32)>,
 }
 
 impl Feed {
@@ -49,9 +53,9 @@ impl Feed {
         Self {
             shared: Arc::new(shared),
             queue: VecDeque::new(),
-            clock_offset: None,
-            dirty_slots: BTreeSet::new(),
-            history_cleared: false,
+            sensor: [0; 6],
+            unsaved: Vec::new(),
+            history_floor: None,
         }
     }
 
@@ -59,25 +63,15 @@ impl Feed {
         self.shared.settings.lock().unwrap().mqtt.clone()
     }
 
-    /// loads a slot saved by an earlier boot.
-    pub fn restore_slot(&self, data: &[u8]) {
-        self.shared.store.lock().unwrap().restore_slot(data);
-    }
-
-    /// everything that changed since the last call, for the host to save.
-    pub fn take_history_changes(&mut self) -> HistoryChanges {
+    /// everything recorded since the last call, for the host to save.
+    pub fn take_unsaved(&mut self) -> Vec<Logged> {
         let store = self.shared.store.lock().unwrap();
-        let slots = self.dirty_slots.iter();
-        let changes = HistoryChanges {
-            clear: self.history_cleared,
-            slots: slots
-                .map(|slot| (*slot, store.encode_slot(*slot)))
-                .collect(),
+        let details = |entry: Entry| {
+            let info = store.info(&entry.sensor);
+            let (name, base) = info.map_or(([0; 8], 0), |info| (info.name, info.base));
+            Logged { entry, name, base }
         };
-        drop(store);
-        self.dirty_slots.clear();
-        self.history_cleared = false;
-        changes
+        self.unsaved.drain(..).map(details).collect()
     }
 
     pub fn shared(&self) -> Arc<Shared> {
@@ -88,21 +82,41 @@ impl Feed {
         *self.shared.last_error.lock().unwrap() = error;
     }
 
-    /// drops what belongs to the previous sensor: its clock started at a
-    /// different moment, so its readings cannot share a timeline with the next.
-    pub fn reset_sensor(&mut self) {
-        self.shared.store.lock().unwrap().clear();
-        self.clock_offset = None;
-        self.dirty_slots.clear();
-        self.history_cleared = true;
+    /// names the sensor the next readings come from.
+    pub fn select_sensor(&mut self, id: SensorId, name: SensorName) {
+        self.sensor = id;
+        self.shared.store.lock().unwrap().identify(id, name, 0);
     }
 
     pub fn last_seen(&self) -> Option<u32> {
-        self.shared.store.lock().unwrap().resume_point()
+        self.shared.store.lock().unwrap().resume_point(&self.sensor)
+    }
+
+    /// the reading to look further back from, if that is still worth trying.
+    pub fn oldest(&self) -> Option<u32> {
+        let oldest = self.shared.store.lock().unwrap().oldest(&self.sensor);
+        oldest.filter(|clock| Some((self.sensor, *clock)) != self.history_floor)
+    }
+
+    /// records that the sensor holds nothing older than what is stored now.
+    pub fn history_exhausted(&mut self) {
+        let oldest = self.shared.store.lock().unwrap().oldest(&self.sensor);
+        self.history_floor = oldest.map(|clock| (self.sensor, clock));
     }
 
     fn time_of(&self, clock: u32) -> Option<u64> {
-        self.clock_offset.map(|offset| offset + u64::from(clock))
+        let store = self.shared.store.lock().unwrap();
+        let base = store.info(&self.sensor).map_or(0, |info| info.base);
+        (base != 0).then(|| u64::from(base) + u64::from(clock))
+    }
+
+    /// stores an entry, reporting whether it was new.
+    fn store(&mut self, entry: &Entry) -> bool {
+        let added = self.shared.store.lock().unwrap().insert(entry);
+        if added {
+            self.unsaved.push(entry.clone());
+        }
+        added
     }
 
     fn enqueue(&mut self, entry: &Entry, topic: &str, retain: bool) {
@@ -125,10 +139,13 @@ impl Feed {
     /// records a live reading against the wall clock `now`.
     pub fn record_reading(&mut self, reading: &Reading, now: u64) -> Entry {
         if now >= MIN_VALID_UNIX {
-            self.clock_offset = Some(now - u64::from(reading.clock));
+            let base = (now - u64::from(reading.clock)) as u32;
+            let mut store = self.shared.store.lock().unwrap();
+            store.identify(self.sensor, [0; 8], base);
         }
         let clock = reading.measured_at();
         let entry = Entry {
+            sensor: self.sensor,
             clock,
             time: self.time_of(clock),
             glucose: reading.glucose,
@@ -136,8 +153,7 @@ impl Feed {
             trend: reading.trend,
             backfill: false,
         };
-        if self.shared.store.lock().unwrap().insert(entry.clone()) {
-            self.dirty_slots.insert(slot_of(entry.clock));
+        if self.store(&entry) {
             self.enqueue(&entry, "glucose", true);
         }
         entry
@@ -145,6 +161,7 @@ impl Feed {
 
     pub fn record_backfill(&mut self, record: &BackfillRecord) -> Entry {
         let entry = Entry {
+            sensor: self.sensor,
             clock: record.clock,
             time: self.time_of(record.clock),
             glucose: Some(record.glucose),
@@ -152,8 +169,7 @@ impl Feed {
             trend: record.trend,
             backfill: true,
         };
-        if self.shared.store.lock().unwrap().insert(entry.clone()) {
-            self.dirty_slots.insert(slot_of(entry.clock));
+        if self.store(&entry) {
             self.enqueue(&entry, "backfill", false);
         }
         entry

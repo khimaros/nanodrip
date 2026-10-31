@@ -8,17 +8,18 @@ use std::thread;
 use std::time::Duration;
 
 use crate::feed::Shared;
+use crate::store::{hex_id, name_text, SensorId};
 
 const INDEX: &str = include_str!("index.html");
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CONNECTIONS: usize = 4;
-const PAGE_ROWS: usize = 16;
+const PAGE_ROWS: usize = 128;
 const DEFAULT_SUMMARY_HOURS: u32 = 24;
 const MAX_SUMMARY_HOURS: usize = 168;
 const SECONDS_PER_HOUR: u32 = 3600;
 /// holds the request buffers and the rendered reading history.
-const CONNECTION_STACK: usize = 6144;
+const CONNECTION_STACK: usize = 8192;
 /// certificate parts are posted as hex, so this has to fit a few kilobytes.
 const MAX_REQUEST: usize = 16384;
 /// browsers cannot add this header cross-origin without a preflight we never
@@ -32,8 +33,8 @@ const TEXT: &str = "text/plain";
 enum Body {
     Text(String),
     Static(&'static str),
-    /// written as it is read: a week of history does not fit in memory as json.
-    Readings(usize),
+    /// written as it is read: years of history do not fit in memory as json.
+    Readings(usize, Option<SensorId>),
 }
 
 struct Response {
@@ -65,18 +66,40 @@ fn number_param(query: &str, name: &str) -> Option<usize> {
         .and_then(|value| value.parse().ok())
 }
 
+fn exact_param(query: &str, start: &str, end: &str) -> Option<(u64, u64)> {
+    let range = number_param(query, start).zip(number_param(query, end))?;
+    Some((range.0 as u64, range.1 as u64))
+}
+
+fn sensor_param(query: &str) -> Option<SensorId> {
+    let text = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("sensor="))?;
+    let mut id = [0u8; 6];
+    let bytes = text.as_bytes().as_chunks::<2>();
+    for (out, pair) in id.iter_mut().zip(bytes.0) {
+        *out = hex_digit(pair[0])? << 4 | hex_digit(pair[1])?;
+    }
+    (bytes.0.len() == id.len() && bytes.1.is_empty()).then_some(id)
+}
+
 fn summary_json(shared: &Shared, query: &str) -> String {
     let hours = number_param(query, "hours").map_or(DEFAULT_SUMMARY_HOURS, |hours| {
         hours.min(MAX_SUMMARY_HOURS) as u32
     });
-    let exact = number_param(query, "from").zip(number_param(query, "to"));
-    let (low, high) = shared.settings.lock().unwrap().target();
+    let filter = sensor_param(query);
+    let timed = exact_param(query, "since", "until");
+    let clocks = exact_param(query, "from", "to");
+    let target = shared.settings.lock().unwrap().target();
     let store = shared.store.lock().unwrap();
-    let (start, end) = exact.map_or_else(
-        || store.recent_range(hours * SECONDS_PER_HOUR),
-        |(from, to)| (from as u32, to as u32),
-    );
-    let totals = store.range_totals(start, end, low, high);
+    let base = store.latest().and_then(|e| e.time).map_or(0, |t| {
+        let clock = store.latest().map_or(0, |e| e.clock);
+        t - u64::from(clock)
+    });
+    let exact = timed.or(clocks.map(|(from, to)| (from + base, to + base)));
+    let range =
+        exact.unwrap_or_else(|| store.recent_range(hours * SECONDS_PER_HOUR, filter.as_ref()));
+    let totals = store.range_totals(range, target, filter.as_ref());
     let mean = totals
         .mean()
         .map_or("null".to_string(), |mean| format!("{mean:.1}"));
@@ -148,6 +171,19 @@ fn status_json(shared: &Shared) -> String {
     let store = shared.store.lock().unwrap();
     let settings = shared.settings.lock().unwrap();
     let latest = store.latest().map_or("null".to_string(), |e| e.to_json());
+    let sensors: Vec<String> = store
+        .sensors()
+        .iter()
+        .filter(|sensor| sensor.count > 0)
+        .map(|sensor| {
+            format!(
+                r#"{{"id":"{}","name":{},"count":{}}}"#,
+                hex_id(&sensor.id),
+                json_string(&name_text(&sensor.name)),
+                sensor.count,
+            )
+        })
+        .collect();
     let last_error = shared.last_error.lock().unwrap();
     let last_error = last_error.map_or("null".to_string(), json_string);
     let mqtt_broker = settings
@@ -160,13 +196,18 @@ fn status_json(shared: &Shared) -> String {
         .map_or("null".to_string(), json_string);
     format!(
         concat!(
-            r#"{{"device":{},"latest":{},"count":{},"mqtt_pending":{},"#,
+            r#"{{"device":{},"latest":{},"count":{},"capacity":{},"free_memory":{},"free_internal":{},"#,
+            r#""sensors":[{}],"mqtt_pending":{},"#,
             r#""paired":{},"certificates":{},"wifi_ssid":{},"last_error":{},"#,
             r#""target_low":{},"target_high":{},"mqtt_broker":{}}}"#
         ),
         json_string(&shared.device),
         latest,
         store.len(),
+        store.capacity(),
+        shared.free_memory.load(Ordering::Relaxed),
+        shared.free_internal.load(Ordering::Relaxed),
+        sensors.join(","),
         shared.pending.load(Ordering::Relaxed),
         settings.paired(),
         settings.has_certificates(),
@@ -239,6 +280,7 @@ fn route(request: &Request, shared: &Shared) -> Response {
         "/api/summary" => json(Body::Text(summary_json(shared, query))),
         "/api/readings" => json(Body::Readings(
             number_param(query, "limit").unwrap_or(usize::MAX),
+            sensor_param(query),
         )),
         _ => text("404 Not Found", "not found\n"),
     }
@@ -312,12 +354,12 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
     match response.body {
         Body::Text(body) => write_body(&mut stream, status, content_type, &body),
         Body::Static(body) => write_body(&mut stream, status, content_type, body),
-        Body::Readings(limit) => {
+        Body::Readings(limit, filter) => {
             write!(
                 stream,
                 "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\nconnection: close\r\n\r\n"
             )?;
-            stream_readings(&mut stream, shared, limit)
+            stream_readings(&mut stream, shared, limit, filter.as_ref())
         }
     }
 }
@@ -339,16 +381,21 @@ fn write_body(
 
 /// writes the newest `limit` readings as a json array, a page at a time and
 /// without holding the store while a slow client catches up.
-fn stream_readings(stream: &mut TcpStream, shared: &Shared, limit: usize) -> std::io::Result<()> {
-    let mut clock = shared.store.lock().unwrap().tail_start(limit);
+fn stream_readings(
+    stream: &mut TcpStream,
+    shared: &Shared,
+    limit: usize,
+    filter: Option<&SensorId>,
+) -> std::io::Result<()> {
+    let mut instant = shared.store.lock().unwrap().tail_start(limit, filter);
     let mut remaining = limit;
     let mut separator = "[";
     while remaining > 0 {
         let count = PAGE_ROWS.min(remaining);
-        let page = shared.store.lock().unwrap().page(clock, count);
+        let page = shared.store.lock().unwrap().page(instant, count, filter);
         let Some(last) = page.last() else { break };
-        clock = last.clock + 1;
-        remaining -= page.len();
+        instant = last.instant() + 1;
+        remaining = remaining.saturating_sub(page.len());
         let mut chunk = String::new();
         for entry in &page {
             chunk.push_str(separator);

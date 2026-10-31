@@ -9,7 +9,7 @@ const MAX_SSID_LEN: usize = 32;
 /// wpa2 passphrase limits; an empty password means an open network.
 const WIFI_PASS_LENS: std::ops::RangeInclusive<usize> = 8..=63;
 const DEFAULT_TARGET: (u16, u16) = (63, 140);
-/// what dexcom sensors report, in mg/dl.
+/// what dexcom sensors report, in mg/dL.
 const GLUCOSE_LIMITS: std::ops::RangeInclusive<u16> = 40..=400;
 
 #[derive(Clone, PartialEq)]

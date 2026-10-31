@@ -2,8 +2,8 @@
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
-from harness import CERT_A, CERT_B, CODE, NOW, Run
-from sensor import Sensor, glucose_packet
+from harness import CERT_A, CERT_B, CODE, NOW, Run, backfill_requests
+from sensor import ADDRESS, Sensor, glucose_packet
 
 
 @pytest.fixture
@@ -22,8 +22,8 @@ def test_first_pairing_yields_reading(tmp_path, signer):
     assert run.errors == []
     assert run.bonds == 1
     assert sensor.certs == [CERT_A, CERT_B]
-    assert run.readings == [{"clock": 863970, "time": NOW - 30, "glucose": 143, "state": 6,
-                             "trend": 1.1, "backfill": False}]
+    assert run.readings == [{"sensor": ADDRESS.hex(), "clock": 863970, "time": NOW - 30,
+                             "glucose": 143, "state": 6, "trend": 1.1, "backfill": False}]
     assert run.disconnected
     assert ("control", b"\x09") in sensor.commands
 
@@ -100,13 +100,28 @@ def test_backfill_recovers_missed_readings(tmp_path, signer):
     assert [b["time"] for b in run.backfill] == [NOW - 1000, NOW - 700, NOW - 400]
 
 
-def test_first_reading_recovers_the_last_day(tmp_path, signer):
+def test_first_reading_recovers_all_the_sensor_holds_a_day_at_a_time(tmp_path, signer):
     key = paired_key(tmp_path, signer)
     sensor = Sensor(CODE, bonded=True, clock=864000, age=30)
     sensor.key = bytes.fromhex(key)
-    sensor.history = [(777000, 99), (780000, 101), (863000, 102)]
+    sensor.history = [(700000, 97), (777000, 99), (780000, 101), (863000, 102)]
     run = Run(sensor, tmp_path).connect()
-    assert [b["glucose"] for b in run.backfill] == [101, 102]
+    assert sorted(b["glucose"] for b in run.backfill) == [97, 99, 101, 102]
+    assert backfill_requests(sensor) == [
+        (777600, 864000), (691200, 777599), (604800, 691199)]
+
+
+def test_first_reading_stops_at_the_start_of_the_sensor_clock(tmp_path, signer):
+    key = paired_key(tmp_path, signer)
+    sensor = Sensor(CODE, bonded=True, clock=90000, age=0)
+    sensor.key = bytes.fromhex(key)
+    Run(sensor, tmp_path).connect()
+    assert backfill_requests(sensor) == [(3600, 90000)], "an empty chunk ends the walk"
+    sensor = Sensor(CODE, bonded=True, clock=90000, age=0)
+    sensor.key = bytes.fromhex(key)
+    sensor.history = [(1800, 100), (3000, 101), (4000, 102)]
+    Run(sensor, tmp_path).connect()
+    assert backfill_requests(sensor) == [(3600, 90000), (1, 3599)]
 
 
 def test_no_backfill_when_up_to_date(tmp_path, signer):

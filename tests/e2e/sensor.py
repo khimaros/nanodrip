@@ -20,6 +20,8 @@ G = (
 PACKET_SIZE = 160
 CERT_SIZE = 100
 CERT_EARLY = 80
+ADDRESS = bytes.fromhex("c0ffee000001")
+NAME = "DX0101"
 CLIENT = b"client"
 SERVER = b"server"
 
@@ -103,8 +105,9 @@ class Sensor:
     (channel, bytes) notifications it would emit in response."""
 
     def __init__(self, code, signer_public=None, bonded=False, glucose=120, state=6,
-                 clock=864000, age=30):
+                 clock=864000, age=30, address=ADDRESS, name=NAME):
         self.secret = int.from_bytes(code.encode(), "big")
+        self.address, self.name = address, name
         self.signer_public = signer_public
         self.bonded = bonded
         self.glucose, self.state, self.clock, self.age = glucose, state, clock, age

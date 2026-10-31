@@ -10,7 +10,8 @@
 - never commit certificate values, keys or WiFi credentials. test fixtures
   generate their own.
 - documentation is lowercase, except acronyms, which are uppercase, and proper
-  nouns, which are capitalized. "i" stays lowercase.
+  nouns, which are capitalized. "i" stays lowercase. glucose units are written
+  `mg/dL`.
 - when working from xDrip source, note that it has two `hexStringToByteArray`
   functions: the one in `libkeks` reverses the nibbles of each byte, used for
   its constants, and the one in `JoH` does not, used for the keks settings.

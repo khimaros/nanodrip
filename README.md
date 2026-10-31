@@ -10,8 +10,10 @@ the place of the Dexcom app on that sensor.
 
 ## hardware
 
-an ESP32-S3 with at least 4 MB of flash. other chips need a different target in
-`firmware/.cargo/config.toml` and matching settings in `firmware/sdkconfig.defaults`.
+an ESP32-S3 with 16 MB of flash, ideally with octal PSRAM (an N16R8 module). less
+flash needs a smaller `log` partition in `firmware/partitions.csv`, and other chips
+need a different target in `firmware/.cargo/config.toml` and matching settings in
+`firmware/sdkconfig.defaults`.
 
 ## setup
 
@@ -55,11 +57,7 @@ setup QR code and stores them on the device:
 then open the web UI, expand "sensor pairing" and enter the code printed on the
 sensor applicator.
 
-the same values can be pasted into the web UI as hex instead: they are xDrip's
-`keks_p1`, `keks_p2` and `keks_p3` settings.
-
-remove the Dexcom app (or any other collector) from the sensor first. pairing a
-new sensor clears the history held on the device.
+remove the Dexcom app (or any other collector) from the sensor first.
 
 ## MQTT
 
@@ -73,32 +71,48 @@ published at QoS 1 as JSON. values wait in memory while the broker is away.
 | `nanodrip/<device>/glucose` | yes | each live reading |
 | `nanodrip/<device>/backfill` | no | readings recovered after a gap |
 
-    {"clock":863970,"time":1799999970,"glucose":143,"state":6,"trend":1.1,"backfill":false}
+    {"sensor":"db5e369f16c2","clock":863970,"time":1799999970,"glucose":143,"state":6,"trend":1.1,"backfill":false}
 
-`glucose` is null unless the sensor reports a trustworthy value, for example
-during warmup. `clock` is seconds since sensor start, `time` is Unix seconds (null
-until the wall clock is known), `trend` is mg/dl per minute.
+`sensor` is the BLE address of the sensor. `glucose` is null unless the sensor
+reports a trustworthy value, for example during warmup. `clock` is seconds since
+sensor start, `time` is Unix seconds (null until the wall clock is known), `trend`
+is mg/dL per minute.
 
 ## web UI
 
 | path | content |
 | --- | --- |
-| `/` | latest value, chart, time out of range, readings table, settings |
-| `/api/status` | device state, without any secrets |
+| `/` | latest value, chart, statistics, targets, readings table, settings |
+| `/api/status` | device state and known sensors, without any secrets |
 | `/api/summary?hours=N` | mean, and seconds above, below and within the target range |
-| `/api/summary?from=C&to=C` | the same between two sensor clock values |
+| `/api/summary?since=T&until=T` | the same between two Unix times |
+| `/api/summary?from=C&to=C` | the same between two clock values of the latest sensor |
 | `/api/readings?limit=N` | history, oldest first |
 
-the target range defaults to 63 to 140 mg/dl and is set under "target range".
-the mean and the time above and below follow the selected interval, which can
-be one of the range buttons or an exact span dragged across the chart. each
-reading counts until the next one, up to 15 minutes, so time with no data is
-left out of these figures.
+`/api/summary` and `/api/readings` take `sensor=<id>` to show one sensor.
 
-history covers up to seven days and is saved to flash after every session, so
-it survives reboots and normal flashing. missing readings are recovered
-automatically from the sensor, which keeps about the last 24 hours. pairing a
-new sensor clears it, and so does erasing the whole flash.
+the statistics follow the selected window, which is one of the range buttons,
+including "max" for everything held, or a span dragged across the chart. the mean
+counts each reading until the next one, up to 15 minutes, so time with no data is
+left out.
+
+"targets" compares the window with published figures for a chosen group: no
+diabetes, type 1 or 2, older or high risk, and pregnancy. each figure links to a
+summary of its source. "met" and "not met" are used only for published targets;
+typical values and suggestions say how the reading compares instead. the group is
+remembered per browser. "my own range" uses the range set under "target range",
+which defaults to 63 to 140 mg/dL. none of this is medical advice.
+
+history is kept per sensor and saved to flash after every session, so it
+survives reboots, normal flashing and pairing a new sensor. the log holds about
+13 years of readings on 16 MB of flash, then overwrites the oldest; on a board
+with no PSRAM, memory limits it to about 70 days. erasing the whole flash clears
+it. missing readings are recovered automatically from the sensor, a day at a
+time, going back as far as it will answer. Dexcom documents 24 hours, but a Stelo
+has returned more than twice that.
+
+to keep a copy, save `/api/readings`. `tools/restore_history.py` turns that file
+into an image for the `log` partition at `0x400000`.
 
 ## security
 

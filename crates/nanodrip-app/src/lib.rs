@@ -2,12 +2,14 @@
 //! runs on the host and under esp-idf.
 
 mod feed;
+mod log;
 mod mqtt;
 mod settings;
 mod store;
 mod web;
 
-pub use feed::{Feed, HistoryChanges, Shared};
+pub use feed::{Feed, Logged, Shared};
+pub use log::{Flash, Log, SECTOR_SIZE};
 pub use settings::{MqttConfig, Settings};
-pub use store::{Entry, Store, SLOTS as HISTORY_SLOTS};
+pub use store::{Entry, SensorId, SensorName, Store};
 pub use web::serve;

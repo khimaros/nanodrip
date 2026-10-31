@@ -173,18 +173,19 @@ def test_changes_need_the_csrf_header(tmp_path, target):
     run.close()
 
 
-def test_new_code_replaces_key_and_history(tmp_path, signer):
+def test_new_code_replaces_key_and_keeps_history(tmp_path, signer):
     old = Sensor(CODE, signer.public_key(), glucose=140)
     run = web_paired_run(tmp_path, old, signer).session()
     assert (tmp_path / "bond.key").exists()
     assert request(run, "POST", "/api/pair", {"code": "5150"})[0] == 200
-    new = Sensor("5150", signer.public_key(), glucose=95, clock=7200, age=10)
+    new = Sensor("5150", signer.public_key(), glucose=95, clock=7200, age=10,
+                 address=bytes.fromhex("c0ffee000002"))
     run.sensor = new
     run.session()
     assert run.errors == []
     assert new.client, "a new sensor needs a full j-pake exchange"
     rows = json.loads(request(run, "GET", "/api/readings")[1])
-    assert [r["glucose"] for r in rows] == [95], "another sensor's clock cannot share a timeline"
+    assert [r["glucose"] for r in rows] == [140, 95]
     run.close()
 
 

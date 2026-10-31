@@ -129,6 +129,15 @@ def test_warmup_readings_are_not_counted(tmp_path, signer):
     run.close()
 
 
+def test_summary_of_all_history_reaches_past_the_longest_range(tmp_path, signer):
+    old = CLOCK - 200 * HOUR
+    run = run_with_history(tmp_path, signer, [(old, 50), (old + 300, 50), *series(120)])
+    everything = get(run, "/api/summary?since=0&until=4294967295")
+    assert get(run, "/api/summary?hours=168")["below_seconds"] == 0
+    assert everything["below_seconds"] == 300 + 900, "the last old reading holds to the span limit"
+    run.close()
+
+
 def test_summary_with_no_readings(tmp_path):
     run = Run(Sensor(CODE), tmp_path, args=HTTP)
     summary = get(run, "/api/summary?hours=3")

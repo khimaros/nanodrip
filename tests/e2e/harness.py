@@ -14,15 +14,21 @@ SIM = ROOT / "target" / "debug" / "nanodrip-sim"
 CODE = "4271"
 CERT_A, CERT_B = b"A" * 450, b"B" * 300
 NOW = 1800000000
+MAX_IDLE_ROUNDS = 40
+
+
+def backfill_requests(sensor):
+    """the (start, end) of every backfill request, in the order they were sent."""
+    return [struct.unpack("<II", c[1][1:9]) for c in sensor.commands if c[1][0] == 0x59]
 
 
 class Run:
     """one simulated ble connection, pumping both sides until they go quiet."""
 
-    def __init__(self, sensor, tmp_path, signer=None, code=CODE, last_seen=None, args=()):
+    def __init__(self, sensor, tmp_path, signer=None, code=CODE, last_seen=None, args=(), now=NOW):
         self.sensor = sensor
         self.key_file = tmp_path / "bond.key"
-        argv = [str(SIM), "--key-file", str(self.key_file), "--now", str(NOW)]
+        argv = [str(SIM), "--key-file", str(self.key_file), "--now", str(now)]
         if code:
             argv += ["--code", code]
         if signer:
@@ -73,6 +79,8 @@ class Run:
         return []
 
     def pump(self, command):
+        if command == "connected":
+            command = f"connected {self.sensor.address.hex()} {self.sensor.name}"
         queue = [command]
         while queue:
             self.send(queue.pop(0))
@@ -82,7 +90,14 @@ class Run:
         return self
 
     def session(self):
-        return self.pump("connected").pump("idle")
+        """a quiet link ends the session, or moves it on to an older chunk of history."""
+        self.disconnected = False
+        self.pump("connected")
+        for _ in range(MAX_IDLE_ROUNDS):
+            self.pump("idle")
+            if self.disconnected:
+                break
+        return self
 
     def close(self):
         self.proc.stdin.close()

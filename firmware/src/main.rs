@@ -1,4 +1,4 @@
-//! nanodrip firmware for the classic esp32: reads a dexcom g7/stelo sensor
+//! nanodrip firmware for the esp32-s3: reads a dexcom g7/stelo sensor
 //! over ble and serves the results over mqtt and http.
 
 mod ble;
@@ -14,11 +14,12 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sntp::EspSntp;
-use nanodrip_app::{serve, Feed, MqttConfig, Settings};
+use esp_idf_svc::sys::{heap_caps_get_free_size, MALLOC_CAP_SPIRAM};
+use nanodrip_app::{serve, Feed, Log, MqttConfig, Settings, Store};
 
 use ble::Radio;
 use net::Network;
-use persist::{History, Persist};
+use persist::{LogFlash, Persist};
 
 /// make exports unset variables as empty, so empty has to mean unset here.
 pub const fn configured(value: Option<&'static str>, default: &'static str) -> &'static str {
@@ -36,6 +37,18 @@ const DEFAULT_WIFI_SSID: Option<&str> = option_env!("NANODRIP_WIFI_SSID");
 const DEFAULT_WIFI_PASS: &str = configured(option_env!("NANODRIP_WIFI_PASS"), "");
 const HTTP_ADDRESS: &str = "0.0.0.0:80";
 const WEB_STACK: usize = 8192;
+/// PSRAM left free for everything else, like web pages and session state.
+const PSRAM_RESERVE: usize = 1024 * 1024;
+const BYTES_PER_READING: usize = 3;
+
+/// as many readings as PSRAM and the log can hold. without PSRAM, the default.
+fn set_capacity(store: &mut Store, log_capacity: usize) {
+    let free = unsafe { heap_caps_get_free_size(MALLOC_CAP_SPIRAM) };
+    log::info!("PSRAM free: {free} bytes");
+    if free > PSRAM_RESERVE {
+        store.set_capacity(((free - PSRAM_RESERVE) / BYTES_PER_READING).min(log_capacity));
+    }
+}
 
 fn mqtt_config() -> Option<MqttConfig> {
     let address = MQTT_ADDRESS.filter(|address| !address.is_empty())?;
@@ -77,21 +90,26 @@ fn main() -> Result<()> {
 
     let feed = Feed::new(DEVICE);
     *feed.shared().settings.lock().unwrap() = saved.clone();
-    let history = History::new()?;
-    history.restore(&feed);
+    let mut log = Log::new(LogFlash::find()?);
+    let shared = feed.shared();
+    let mut store = shared.store.lock().unwrap();
+    set_capacity(&mut store, log.capacity());
+    log.load(&mut store)?;
+    log::info!("{} of {} readings", store.len(), store.capacity());
+    drop(store);
 
     let listener = TcpListener::bind(HTTP_ADDRESS)?;
-    let shared = feed.shared();
     thread::Builder::new()
         .stack_size(WEB_STACK)
         .spawn(move || serve(listener, shared))?;
     log::info!("nanodrip started as {DEVICE}");
+    ble::start_watchdog()?;
 
     Radio {
         ble: BLEDevice::take(),
         feed,
         persist,
-        history,
+        log,
         network,
         generation: saved.generation,
         saved,

@@ -46,9 +46,9 @@ def web_json(run, target):
 def test_reading_is_published_retained(tmp_path, signer, broker):
     sensor = Sensor(CODE, signer.public_key(), glucose=143, age=30)
     Run(sensor, tmp_path, signer, args=mqtt_args(broker.port)).connect()
-    assert broker.messages == [(GLUCOSE_TOPIC, {"clock": 863970, "time": NOW - 30, "glucose": 143,
-                                                "state": 6, "trend": 1.1, "backfill": False},
-                                True)]
+    assert broker.messages == [(GLUCOSE_TOPIC, {"sensor": sensor.address.hex(), "clock": 863970,
+                                                "time": NOW - 30, "glucose": 143, "state": 6,
+                                                "trend": 1.1, "backfill": False}, True)]
 
 
 def test_credentials_are_sent(tmp_path, signer, broker):
@@ -125,13 +125,37 @@ def test_readings_limit_keeps_newest(tmp_path, signer):
     run.close()
 
 
+def test_index_offers_all_history(tmp_path):
+    run = Run(Sensor(CODE), tmp_path, args=["--http", "127.0.0.1:0"])
+    page = web(run, "/")[2].decode("ascii")
+    assert '["max", ALL_HISTORY]' in page
+    run.close()
+
+
 def test_index_is_self_contained(tmp_path):
     run = Run(Sensor(CODE), tmp_path, args=["--http", "127.0.0.1:0"])
     status, content_type, body = web(run, "/")
     page = body.decode("ascii").replace(SVG_NAMESPACE, "")
     assert status == 200 and content_type.startswith("text/html")
     assert "nanodrip" in page and "/api/readings" in page
-    assert "http://" not in page and "https://" not in page, "the page must work offline"
+    for loaded in ("src=", "@import", "url(http", 'rel="stylesheet"', 'fetch("http'):
+        assert loaded not in page, "the page must work offline"
+    run.close()
+
+
+def test_index_cites_every_target_source(tmp_path):
+    run = Run(Sensor(CODE), tmp_path, args=["--http", "127.0.0.1:0"])
+    page = web(run, "/")[2].decode("ascii")
+    for source in ("10.2337/dci19-0028", "PMC7296129", "bmjdrc-2023-003989", "dc23-2149"):
+        assert source in page
+    run.close()
+
+
+def test_index_offers_twelve_hours_and_no_certificate_form(tmp_path):
+    run = Run(Sensor(CODE), tmp_path, args=["--http", "127.0.0.1:0"])
+    page = web(run, "/")[2].decode("ascii")
+    assert '["12h", 12]' in page
+    assert "cert-form" not in page and "keks_p" not in page
     run.close()
 
 

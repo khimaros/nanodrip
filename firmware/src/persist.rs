@@ -1,10 +1,16 @@
-//! pairing state that must survive a reboot, kept in nvs.
+//! what must survive a reboot: pairing state in nvs, readings in the log.
 
-use anyhow::Result;
-use esp_idf_svc::nvs::{
-    EspCustomNvsPartition, EspDefaultNvsPartition, EspNvs, NvsCustom, NvsDefault,
+use std::ffi::CStr;
+use std::io;
+
+use anyhow::{anyhow, Result};
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
+use esp_idf_svc::sys::{
+    esp, esp_err_t, esp_partition_erase_range, esp_partition_find_first, esp_partition_read,
+    esp_partition_subtype_t, esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_UNDEFINED,
+    esp_partition_t, esp_partition_type_t_ESP_PARTITION_TYPE_DATA, esp_partition_write,
 };
-use nanodrip_app::{Feed, HistoryChanges, MqttConfig, Settings, HISTORY_SLOTS};
+use nanodrip_app::{Flash, MqttConfig, Settings, SECTOR_SIZE};
 
 const NAMESPACE: &str = "nanodrip";
 const MAX_BLOB: usize = 4096;
@@ -22,44 +28,52 @@ const MQTT_ADDRESS: &str = "mqtt_addr";
 const MQTT_USER: &str = "mqtt_user";
 const MQTT_PASS: &str = "mqtt_pass";
 
-const HISTORY_PARTITION: &str = "history";
+const LOG_PARTITION: &CStr = c"log";
+const LOG_SUBTYPE: esp_partition_subtype_t =
+    esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_UNDEFINED;
 
-/// readings, in their own partition so they cannot crowd out the pairing.
-pub struct History {
-    nvs: EspNvs<NvsCustom>,
+/// the raw flash behind the reading log. nvs would need RAM for every page.
+pub struct LogFlash {
+    partition: *const esp_partition_t,
 }
 
-fn slot_key(slot: u16) -> String {
-    format!("s{slot}")
+fn checked(result: esp_err_t) -> io::Result<()> {
+    esp!(result).map_err(io::Error::other)
 }
 
-impl History {
-    pub fn new() -> Result<Self> {
-        let partition = EspCustomNvsPartition::take(HISTORY_PARTITION)?;
-        Ok(Self {
-            nvs: EspNvs::new(partition, HISTORY_PARTITION, true)?,
-        })
+impl LogFlash {
+    pub fn find() -> Result<Self> {
+        let kind = esp_partition_type_t_ESP_PARTITION_TYPE_DATA;
+        // the name lives as long as the call and the partition table for good
+        let partition =
+            unsafe { esp_partition_find_first(kind, LOG_SUBTYPE, LOG_PARTITION.as_ptr()) };
+        if partition.is_null() {
+            return Err(anyhow!("no log partition"));
+        }
+        Ok(Self { partition })
+    }
+}
+
+impl Flash for LogFlash {
+    fn sectors(&self) -> u32 {
+        unsafe { (*self.partition).size / SECTOR_SIZE as u32 }
     }
 
-    pub fn restore(&self, feed: &Feed) {
-        let mut buffer = vec![0u8; MAX_BLOB];
-        for slot in 0..HISTORY_SLOTS {
-            if let Ok(Some(data)) = self.nvs.get_blob(&slot_key(slot), &mut buffer) {
-                feed.restore_slot(data);
-            }
-        }
+    fn read(&self, at: u32, data: &mut [u8]) -> io::Result<()> {
+        let target = data.as_mut_ptr().cast();
+        let size = data.len();
+        checked(unsafe { esp_partition_read(self.partition, at as usize, target, size) })
     }
 
-    pub fn save(&mut self, changes: HistoryChanges) -> Result<()> {
-        if changes.clear {
-            for slot in 0..HISTORY_SLOTS {
-                self.nvs.remove(&slot_key(slot))?;
-            }
-        }
-        for (slot, data) in changes.slots {
-            self.nvs.set_blob(&slot_key(slot), &data)?;
-        }
-        Ok(())
+    fn write(&mut self, at: u32, data: &[u8]) -> io::Result<()> {
+        let source = data.as_ptr().cast();
+        let size = data.len();
+        checked(unsafe { esp_partition_write(self.partition, at as usize, source, size) })
+    }
+
+    fn erase(&mut self, sector: u32) -> io::Result<()> {
+        let at = sector as usize * SECTOR_SIZE;
+        checked(unsafe { esp_partition_erase_range(self.partition, at, SECTOR_SIZE) })
     }
 }
 

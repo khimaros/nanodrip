@@ -47,17 +47,44 @@ encrypts the link before using control because Android does that implicitly.
   matching xDrip. a wrong saved key is caught by the status message and cleared.
 - the key is saved only after the sensor reports authenticated, so a wrong code
   never persists.
-- history is kept packed at 13 bytes per reading and saved in six hour slots to
-  a `history` partition, which a normal flash leaves alone. the `nvs` partition
-  must never move, because it holds the pairing.
-- backfill resumes from the oldest gap within the sensor's 24 hour window, not
-  from the newest reading, so an interrupted backfill is retried by itself.
-- `/api/readings` is streamed a page at a time: a week of JSON does not fit in
-  memory, and building it in one piece crashed the device.
+- history is per sensor, keyed by BLE address, the only identity that is stable
+  and unique; the advertised name is kept for display. each sensor has its own
+  clock, so readings share a timeline through wall clock time. pairing and
+  forgetting leave history alone, and pairing a sensor again continues it.
+- all history stays in memory: three bytes per reading, in runs on the sensor's
+  five minute grid. a reading off the grid starts a new run, so no clock is ever
+  rounded. state values go through a table, as xDrip names values up to `0xC3`.
+  runs are capped at a week to avoid large contiguous allocations.
+- the `log` partition is a ring of 4 KB sectors. each sector belongs to one
+  sensor and starts with a 40 byte header naming it, followed by 9 byte records,
+  so a raw copy is readable alone and sensors taking turns each keep an open
+  sector instead of wasting one per switch. appending never rewrites, which
+  evens out wear, and a damaged record loses only itself. NVS is not used here
+  because its RAM use grows with partition size. a normal flash leaves `log`
+  alone. the `nvs` partition must never move, because it holds the pairing.
+- at boot the log is read back into memory, so nothing but saving touches flash.
+  the store's capacity is what PSRAM holds, capped at what the log holds.
+- `tools/restore_history.py` turns a saved `/api/readings` into a log image. it is
+  written from this description, independently of the Rust code.
+- backfill resumes from the oldest gap within the last 24 hours, not from the
+  newest reading, so an interrupted backfill is retried by itself.
+- once that is done, the session walks back from the oldest reading, one day per
+  `59` request, until a day comes back empty or history is full. Dexcom documents
+  24 hours, but a real Stelo returned all of its first 52 hours, so the sensor's
+  answer sets the limit. the result is kept in memory only: a reboot costs one
+  empty request.
+- `/api/readings` is streamed a page at a time: long history as JSON does not fit
+  in memory, and building it in one piece crashed the device.
 - MQTT uses a short connection per flush at QoS 1, and unconfirmed messages stay
   queued (up to one day). retained values live on `glucose` only.
-- history is ordered by sensor clock, so it is cleared when the pairing changes:
-  another sensor's clock has a different origin.
+- the page keeps all readings in the browser and works out its statistics there,
+  fetching again only when the count in `/api/status` changes, with one request
+  at a time. range changes need no request. the group chosen for targets lives in
+  the browser's `localStorage`, and the published figures live in the page.
+- the page never loads anything from outside, so it works offline. source links
+  are the only external addresses, and open only when followed.
+- a watchdog restarts the board if the radio loop stops for 10 minutes, because
+  some BLE calls can wait forever. readings are saved after each session.
 - settings changes bump `generation`. the BLE loop applies them between
   connections, so the web server never touches radio state.
 - POST routes need an `x-nanodrip` header, which cross-origin pages cannot send
@@ -87,6 +114,12 @@ reports the link as unbonded, so certificates and bonding repeat each session.
 
 ## known limits
 
+- only one sensor is paired at a time. the API can filter by sensor, but nothing
+  yet groups sensors by person or reads several at once.
+- the page fetches all readings when the count changes, about 45 seconds per year
+  of history over WiFi, so long history will need a request for only what is new.
+- if the ring is ever full, a walk back into older history writes last and so
+  overwrites the newest saved readings before the oldest.
 - gaps the sensor has no data for are requested again every session until they
   leave the 24 hour window, because nothing records that a backfill finished.
 - a failed WiFi join at boot stays on the setup network until reboot, by design

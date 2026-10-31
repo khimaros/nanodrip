@@ -20,8 +20,11 @@ const MIN_CERT_LEN: usize = 100;
 const SIGN_RX_OFFSET: usize = 2;
 /// one missed five minute reading plus slack before history is requested.
 pub const BACKFILL_GAP_SECONDS: u32 = 420;
-/// the history window xdrip requests from these sensors.
+/// the history window xdrip requests from these sensors, and the most asked
+/// for at once when looking further back than that.
 pub const BACKFILL_WINDOW_SECONDS: u32 = 86_400;
+/// the earliest sensor clock a request may name; xdrip rejects anything below.
+const FIRST_CLOCK: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Channel {
@@ -64,6 +67,7 @@ pub enum Action {
     ClearKey,
     Reading(Reading),
     Backfill(BackfillRecord),
+    HistoryExhausted,
     Fail(Error),
     Disconnect,
 }
@@ -76,6 +80,8 @@ pub struct Config {
     pub part_c: Vec<u8>,
     pub saved_key: Option<SharedKey>,
     pub last_seen: Option<u32>,
+    /// the oldest reading held, if the sensor may have anything before it.
+    pub oldest: Option<u32>,
 }
 
 impl Config {
@@ -132,6 +138,8 @@ pub struct Session {
     token: [u8; TOKEN_SIZE],
     buffer: Vec<u8>,
     expected: usize,
+    walking_back: bool,
+    received: usize,
 }
 
 impl Session {
@@ -144,6 +152,8 @@ impl Session {
             token: [0; TOKEN_SIZE],
             buffer: Vec::new(),
             expected: 0,
+            walking_back: false,
+            received: 0,
         }
     }
 
@@ -183,13 +193,7 @@ impl Session {
     /// the host saw no traffic for a while: end a finished session or give up.
     pub fn on_idle(&mut self) -> Vec<Action> {
         match self.state {
-            State::Data | State::Backfill => {
-                self.state = State::Done;
-                alloc::vec![
-                    Action::Write(Channel::Control, alloc::vec![OP_DISCONNECT]),
-                    Action::Disconnect,
-                ]
-            }
+            State::Data | State::Backfill => self.on_quiet(),
             State::Idle | State::Done | State::Failed => Vec::new(),
             _ => self.fail(Error::Timeout),
         }
@@ -395,26 +399,65 @@ impl Session {
             return Vec::new();
         };
         let mut actions = Vec::new();
-        if let Some(start) = self.backfill_start(&reading) {
-            let mut message = alloc::vec![OP_BACKFILL];
-            message.extend_from_slice(&start.to_le_bytes());
-            message.extend_from_slice(&reading.clock.to_le_bytes());
-            self.state = State::Backfill;
-            self.buffer.clear();
-            actions.push(Action::Write(Channel::Control, message));
+        let start = self.backfill_start(&reading);
+        if self.config.last_seen.is_none() {
+            self.walking_back = true;
+            self.config.oldest = start;
+        }
+        if let Some(start) = start {
+            actions.push(self.request_backfill(start, reading.clock));
         }
         actions.insert(0, Action::Reading(reading));
         actions
     }
 
+    fn request_backfill(&mut self, start: u32, end: u32) -> Action {
+        let mut message = alloc::vec![OP_BACKFILL];
+        message.extend_from_slice(&start.to_le_bytes());
+        message.extend_from_slice(&end.to_le_bytes());
+        self.state = State::Backfill;
+        self.buffer.clear();
+        self.received = 0;
+        Action::Write(Channel::Control, message)
+    }
+
     /// where history should resume from, if anything is missing. with nothing
-    /// stored yet, that is as far back as the sensor keeps.
+    /// stored yet, that is one window back, and `on_quiet` goes on from there.
     fn backfill_start(&self, reading: &Reading) -> Option<u32> {
         match self.config.last_seen {
             Some(last) => (reading.measured_at().saturating_sub(last) > BACKFILL_GAP_SECONDS)
                 .then_some(last + 1),
-            None => Some(reading.clock.saturating_sub(BACKFILL_WINDOW_SECONDS).max(1)),
+            None => Some(
+                reading
+                    .clock
+                    .saturating_sub(BACKFILL_WINDOW_SECONDS)
+                    .max(FIRST_CLOCK),
+            ),
         }
+    }
+
+    /// the sensor has sent all it will for now: asks for the day before
+    /// everything requested so far, walking back until a day comes back empty.
+    /// how far the sensor keeps data is undocumented, so that is the only limit.
+    fn on_quiet(&mut self) -> Vec<Action> {
+        let exhausted = self.walking_back && self.received == 0;
+        let older = self.config.oldest.filter(|clock| *clock > FIRST_CLOCK);
+        if let Some(oldest) = older.filter(|_| !exhausted) {
+            let start = oldest
+                .saturating_sub(BACKFILL_WINDOW_SECONDS)
+                .max(FIRST_CLOCK);
+            self.config.oldest = Some(start);
+            self.walking_back = true;
+            return alloc::vec![self.request_backfill(start, oldest - 1)];
+        }
+        self.state = State::Done;
+        let mut actions = Vec::new();
+        if exhausted {
+            actions.push(Action::HistoryExhausted);
+        }
+        actions.push(Action::Write(Channel::Control, alloc::vec![OP_DISCONNECT]));
+        actions.push(Action::Disconnect);
+        actions
     }
 
     fn on_backfill(&mut self, data: &[u8]) -> Vec<Action> {
@@ -424,12 +467,13 @@ impl Session {
         self.buffer.extend_from_slice(data);
         let whole = self.buffer.len() - self.buffer.len() % BACKFILL_RECORD_SIZE;
         let (records, _) = self.buffer[..whole].as_chunks::<BACKFILL_RECORD_SIZE>();
-        let actions = records
+        let actions: Vec<Action> = records
             .iter()
             .filter_map(|record| BackfillRecord::parse(record))
             .map(Action::Backfill)
             .collect();
         self.buffer.drain(..whole);
+        self.received += actions.len();
         actions
     }
 }
