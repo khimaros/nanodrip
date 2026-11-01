@@ -20,6 +20,7 @@ use rand_core::OsRng;
 
 const DEFAULT_DEVICE: &str = "sim";
 const DEFAULT_LOG_SECTORS: u32 = 64;
+const DEFAULT_TAG_SECTORS: u32 = 4;
 const KEY_SIZE: usize = 16;
 const ERASED: u8 = 0xFF;
 
@@ -126,6 +127,13 @@ fn open_log(args: &HashMap<String, String>, feed: &Feed) -> Option<Log<FileFlash
     let shared = feed.shared();
     log.load(&mut shared.store.lock().unwrap())
         .expect("load log");
+    let sectors = args
+        .get("tag-sectors")
+        .map_or(DEFAULT_TAG_SECTORS, |v| v.parse().expect("tag-sectors"));
+    let flash = FileFlash::open(&dir.join("tags.bin"), sectors).expect("open tags");
+    let mut tags = shared.tags.lock().unwrap();
+    tags.attach(Box::new(flash)).expect("load tags");
+    drop(tags);
     Some(log)
 }
 

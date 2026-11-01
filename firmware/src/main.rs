@@ -19,7 +19,7 @@ use nanodrip_app::{serve, Feed, Log, MqttConfig, Settings, Store};
 
 use ble::Radio;
 use net::Network;
-use persist::{LogFlash, Persist};
+use persist::{LogFlash, Persist, LOG_PARTITION, TAG_PARTITION};
 
 /// make exports unset variables as empty, so empty has to mean unset here.
 pub const fn configured(value: Option<&'static str>, default: &'static str) -> &'static str {
@@ -90,13 +90,15 @@ fn main() -> Result<()> {
 
     let feed = Feed::new(DEVICE);
     *feed.shared().settings.lock().unwrap() = saved.clone();
-    let mut log = Log::new(LogFlash::find()?);
+    let mut log = Log::new(LogFlash::find(LOG_PARTITION)?);
     let shared = feed.shared();
     let mut store = shared.store.lock().unwrap();
     set_capacity(&mut store, log.capacity());
     log.load(&mut store)?;
     log::info!("{} of {} readings", store.len(), store.capacity());
     drop(store);
+    let tag_flash = LogFlash::find(TAG_PARTITION)?;
+    shared.tags.lock().unwrap().attach(Box::new(tag_flash))?;
 
     let listener = TcpListener::bind(HTTP_ADDRESS)?;
     thread::Builder::new()

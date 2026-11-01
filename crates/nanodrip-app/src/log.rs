@@ -40,7 +40,7 @@ fn header_check(header: &[u8]) -> u32 {
     header[..HEADER_SIZE - 4].iter().fold(HEADER_SEED, fold)
 }
 
-fn word(data: &[u8], at: usize) -> u32 {
+pub(crate) fn word(data: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
 }
 

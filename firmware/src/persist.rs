@@ -28,27 +28,30 @@ const MQTT_ADDRESS: &str = "mqtt_addr";
 const MQTT_USER: &str = "mqtt_user";
 const MQTT_PASS: &str = "mqtt_pass";
 
-const LOG_PARTITION: &CStr = c"log";
+pub const LOG_PARTITION: &CStr = c"log";
+pub const TAG_PARTITION: &CStr = c"tags";
 const LOG_SUBTYPE: esp_partition_subtype_t =
     esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_UNDEFINED;
 
-/// the raw flash behind the reading log. nvs would need RAM for every page.
+/// the raw flash behind a log. nvs would need RAM for every page.
 pub struct LogFlash {
     partition: *const esp_partition_t,
 }
+
+// the pointer is to the partition table, which is never written or freed.
+unsafe impl Send for LogFlash {}
 
 fn checked(result: esp_err_t) -> io::Result<()> {
     esp!(result).map_err(io::Error::other)
 }
 
 impl LogFlash {
-    pub fn find() -> Result<Self> {
+    pub fn find(name: &CStr) -> Result<Self> {
         let kind = esp_partition_type_t_ESP_PARTITION_TYPE_DATA;
         // the name lives as long as the call and the partition table for good
-        let partition =
-            unsafe { esp_partition_find_first(kind, LOG_SUBTYPE, LOG_PARTITION.as_ptr()) };
+        let partition = unsafe { esp_partition_find_first(kind, LOG_SUBTYPE, name.as_ptr()) };
         if partition.is_null() {
-            return Err(anyhow!("no log partition"));
+            return Err(anyhow!("no {name:?} partition"));
         }
         Ok(Self { partition })
     }

@@ -64,6 +64,13 @@ encrypts the link before using control because Android does that implicitly.
   alone. the `nvs` partition must never move, because it holds the pairing.
 - at boot the log is read back into memory, so nothing but saving touches flash.
   the store's capacity is what PSRAM holds, capped at what the log holds.
+- tags are names on moments in wall clock time, not on readings or sensors, so
+  they outlast both. the `tags` partition is a ring of its own, holding adds and
+  removals that are replayed at boot, with room for about 25,000 changes. unlike
+  readings, a tag has no other copy, so it is written to flash by the web thread
+  before the request succeeds rather than after the next session. suggestions are
+  worked out in the browser from the tags themselves. times are whole minutes, so
+  tags in one minute are at the same time and share a table row.
 - `tools/restore_history.py` turns a saved `/api/readings` into a log image. it is
   written from this description, independently of the Rust code.
 - backfill resumes from the oldest gap within the last 24 hours, not from the
@@ -79,10 +86,12 @@ encrypts the link before using control because Android does that implicitly.
   queued (up to one day). retained values live on `glucose` only.
 - the page keeps all readings in the browser and works out its statistics there,
   fetching again only when the count in `/api/status` changes, with one request
-  at a time. range changes need no request. the group chosen for targets lives in
+  at a time. tags work the same way through `tag_revision`. range changes need no request. the group chosen for targets lives in
   the browser's `localStorage`, and the published figures live in the page.
 - the page never loads anything from outside, so it works offline. source links
-  are the only external addresses, and open only when followed.
+  are the only external addresses, and open only when followed. the logo and tab
+  icon are copied into it from `assets/`, a test keeps them equal, and the icon is
+  a bolder drawing because the logo's small drips blur at 16 px.
 - a watchdog restarts the board if the radio loop stops for 10 minutes, because
   some BLE calls can wait forever. readings are saved after each session.
 - settings changes bump `generation`. the BLE loop applies them between
@@ -120,6 +129,8 @@ reports the link as unbonded, so certificates and bonding repeat each session.
   of history over WiFi, so long history will need a request for only what is new.
 - if the ring is ever full, a walk back into older history writes last and so
   overwrites the newest saved readings before the oldest.
+- a full `tags` ring overwrites the oldest changes, and until a reboot those tags
+  are still shown. removing a name's last tag also drops it from suggestions.
 - gaps the sensor has no data for are requested again every session until they
   leave the 24 hour window, because nothing records that a backfill finished.
 - a failed WiFi join at boot stays on the setup network until reboot, by design

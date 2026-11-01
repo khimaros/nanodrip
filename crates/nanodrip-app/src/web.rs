@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::feed::Shared;
+use crate::feed::{Shared, MIN_VALID_UNIX};
 use crate::store::{hex_id, name_text, SensorId};
+use crate::tags::{clean_name, Tag};
 
 const INDEX: &str = include_str!("index.html");
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -35,6 +36,7 @@ enum Body {
     Static(&'static str),
     /// written as it is read: years of history do not fit in memory as json.
     Readings(usize, Option<SensorId>),
+    Tags,
 }
 
 struct Response {
@@ -184,6 +186,7 @@ fn status_json(shared: &Shared) -> String {
             )
         })
         .collect();
+    let tag_revision = shared.tags.lock().unwrap().revision();
     let last_error = shared.last_error.lock().unwrap();
     let last_error = last_error.map_or("null".to_string(), json_string);
     let mqtt_broker = settings
@@ -199,7 +202,7 @@ fn status_json(shared: &Shared) -> String {
             r#"{{"device":{},"latest":{},"count":{},"capacity":{},"free_memory":{},"free_internal":{},"#,
             r#""sensors":[{}],"mqtt_pending":{},"#,
             r#""paired":{},"certificates":{},"wifi_ssid":{},"last_error":{},"#,
-            r#""target_low":{},"target_high":{},"mqtt_broker":{}}}"#
+            r#""target_low":{},"target_high":{},"mqtt_broker":{},"tag_revision":{}}}"#
         ),
         json_string(&shared.device),
         latest,
@@ -216,6 +219,7 @@ fn status_json(shared: &Shared) -> String {
         settings.target().0,
         settings.target().1,
         mqtt_broker,
+        tag_revision,
     )
 }
 
@@ -227,7 +231,49 @@ fn applied(ok: bool) -> Response {
     }
 }
 
+/// a flash failure is reported, as the browser still holds what was typed.
+fn tag_result(result: std::io::Result<bool>) -> Response {
+    match result {
+        Ok(done) => applied(done),
+        Err(_) => text("500 Internal Server Error", "could not save\n"),
+    }
+}
+
+fn tag_field(body: &str, name: &str) -> Option<Tag> {
+    let time: u32 = form_value(body, "time").parse().ok()?;
+    let name = clean_name(&form_value(body, name))?;
+    (u64::from(time) >= MIN_VALID_UNIX).then_some(Tag { time, name })
+}
+
+/// `old` turns adding into renaming, as one change to the log.
+fn post_tag(body: &str, shared: &Shared) -> Response {
+    let Some(tag) = tag_field(body, "name") else {
+        return applied(false);
+    };
+    let mut tags = shared.tags.lock().unwrap();
+    tag_result(if form_value(body, "old").is_empty() {
+        tags.add(tag).map(|_| true)
+    } else {
+        match tag_field(body, "old") {
+            Some(old) => tags.rename(&old, tag.name),
+            None => Ok(false),
+        }
+    })
+}
+
+fn post_tag_removal(body: &str, shared: &Shared) -> Response {
+    let Some(tag) = tag_field(body, "name") else {
+        return applied(false);
+    };
+    tag_result(shared.tags.lock().unwrap().remove(&tag))
+}
+
 fn route_post(path: &str, body: &str, shared: &Shared) -> Response {
+    match path {
+        "/api/tag" => return post_tag(body, shared),
+        "/api/tag/remove" => return post_tag_removal(body, shared),
+        _ => {}
+    }
     let mut settings = shared.settings.lock().unwrap();
     match path {
         "/api/pair" => applied(settings.pair(&form_value(body, "code"))),
@@ -282,6 +328,7 @@ fn route(request: &Request, shared: &Shared) -> Response {
             number_param(query, "limit").unwrap_or(usize::MAX),
             sensor_param(query),
         )),
+        "/api/tags" => json(Body::Tags),
         _ => text("404 Not Found", "not found\n"),
     }
 }
@@ -355,13 +402,26 @@ fn handle(mut stream: TcpStream, shared: &Shared) -> std::io::Result<()> {
         Body::Text(body) => write_body(&mut stream, status, content_type, &body),
         Body::Static(body) => write_body(&mut stream, status, content_type, body),
         Body::Readings(limit, filter) => {
-            write!(
-                stream,
-                "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\nconnection: close\r\n\r\n"
-            )?;
+            write_open_head(&mut stream, status, content_type)?;
             stream_readings(&mut stream, shared, limit, filter.as_ref())
         }
+        Body::Tags => {
+            write_open_head(&mut stream, status, content_type)?;
+            stream_tags(&mut stream, shared)
+        }
     }
+}
+
+/// a head for a body whose length is not known up front.
+fn write_open_head(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+) -> std::io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\nconnection: close\r\n\r\n"
+    )
 }
 
 fn write_body(
@@ -401,6 +461,31 @@ fn stream_readings(
             chunk.push_str(separator);
             chunk.push_str(&entry.to_json());
             separator = ",";
+        }
+        stream.write_all(chunk.as_bytes())?;
+    }
+    stream.write_all(if separator == "[" { b"[]" } else { b"]" })
+}
+
+/// writes every tag as a json array, without holding them for a slow client.
+fn stream_tags(stream: &mut TcpStream, shared: &Shared) -> std::io::Result<()> {
+    let mut from = 0;
+    let mut separator = "[";
+    loop {
+        let mut chunk = String::new();
+        let tags = shared.tags.lock().unwrap();
+        for tag in tags.page(from, PAGE_ROWS) {
+            let name = json_string(&tag.name);
+            chunk.push_str(&format!(
+                r#"{separator}{{"time":{},"name":{name}}}"#,
+                tag.time
+            ));
+            separator = ",";
+            from += 1;
+        }
+        drop(tags);
+        if chunk.is_empty() {
+            break;
         }
         stream.write_all(chunk.as_bytes())?;
     }

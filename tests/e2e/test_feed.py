@@ -2,7 +2,11 @@
 
 import http.client
 import json
+import pathlib
+import re
 import socket
+from urllib.parse import unquote
+from xml.etree.ElementTree import canonicalize
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -12,6 +16,7 @@ from sensor import Sensor
 GLUCOSE_TOPIC = "nanodrip/kitchen/glucose"
 BACKFILL_TOPIC = "nanodrip/kitchen/backfill"
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+ASSETS = pathlib.Path(__file__).parents[2] / "assets"
 
 
 @pytest.fixture
@@ -141,6 +146,18 @@ def test_index_is_self_contained(tmp_path):
     for loaded in ("src=", "@import", "url(http", 'rel="stylesheet"', 'fetch("http'):
         assert loaded not in page, "the page must work offline"
     run.close()
+
+
+def test_index_carries_the_logo_files(tmp_path):
+    run = Run(Sensor(CODE), tmp_path, args=["--http", "127.0.0.1:0"])
+    page = web(run, "/")[2].decode("ascii")
+    run.close()
+    header = re.search(r"<header>.*?</header>", page, re.DOTALL).group()
+    for shape in re.findall(r"<path [^>]*>", (ASSETS / "logo.svg").read_text()):
+        assert shape in header
+    icon = re.search(r'<link rel="icon" href="data:image/svg\+xml,([^"]*)">', page).group(1)
+    assert (canonicalize(unquote(icon), strip_text=True)
+            == canonicalize((ASSETS / "icon.svg").read_text(), strip_text=True))
 
 
 def test_index_cites_every_target_source(tmp_path):

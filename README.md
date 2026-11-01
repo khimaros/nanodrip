@@ -1,3 +1,5 @@
+<img src="assets/logo.svg" alt="" width="96">
+
 # nanodrip
 
 ESP32 reader for Dexcom G7, One+ and Stelo sensors. it pairs with the sensor
@@ -11,7 +13,7 @@ the place of the Dexcom app on that sensor.
 ## hardware
 
 an ESP32-S3 with 16 MB of flash, ideally with octal PSRAM (an N16R8 module). less
-flash needs a smaller `log` partition in `firmware/partitions.csv`, and other chips
+flash needs smaller `log` and `tags` partitions in `firmware/partitions.csv`, and other chips
 need a different target in `firmware/.cargo/config.toml` and matching settings in
 `firmware/sdkconfig.defaults`.
 
@@ -88,11 +90,26 @@ is mg/dL per minute.
 | `/api/summary?since=T&until=T` | the same between two Unix times |
 | `/api/summary?from=C&to=C` | the same between two clock values of the latest sensor |
 | `/api/readings?limit=N` | history, oldest first |
+| `/api/tags` | tags, oldest first |
+| `POST /api/tag` | add `time` and `name`, or rename with `old` as well |
+| `POST /api/tag/remove` | remove `time` and `name` |
 
-`/api/summary` and `/api/readings` take `sensor=<id>` to show one sensor.
+`/api/summary` and `/api/readings` take `sensor=<id>` to show one sensor. POST
+routes need an `x-nanodrip` header, and `time` is in Unix seconds.
+
+click or tap the chart to tag that moment, or press "+" to choose a date and time,
+which starts at now. tags you have used are suggested, most used first, and typing
+filters them. a tag shows as a dot on the line, named when there is room, and
+hovering near one shows it beside the reading. clicking the dot renames or removes
+it. the readings table gives tags their own row, one row per exact time, among the
+newest 50 readings. names are lowercase, up to 32 bytes, and times are whole minutes.
+tags live on the device, so every browser sees the same ones, and they survive
+reboots, flashing and changing sensors.
 
 the statistics follow the selected window, which is one of the range buttons,
-including "max" for everything held, or a span dragged across the chart. the mean
+including "max" for everything held, or a span dragged across the chart. with a
+mouse or trackpad over the chart, shift+scroll moves through history and ctrl+scroll
+zooms around the pointer. the mean
 counts each reading until the next one, up to 15 minutes, so time with no data is
 left out.
 
@@ -105,7 +122,7 @@ which defaults to 63 to 140 mg/dL. none of this is medical advice.
 
 history is kept per sensor and saved to flash after every session, so it
 survives reboots, normal flashing and pairing a new sensor. the log holds about
-13 years of readings on 16 MB of flash, then overwrites the oldest; on a board
+12 years of readings on 16 MB of flash, then overwrites the oldest; on a board
 with no PSRAM, memory limits it to about 70 days. erasing the whole flash clears
 it. missing readings are recovered automatically from the sensor, a day at a
 time, going back as far as it will answer. Dexcom documents 24 hours, but a Stelo

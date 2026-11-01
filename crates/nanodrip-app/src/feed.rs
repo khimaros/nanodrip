@@ -9,17 +9,19 @@ use nanodrip_core::{BackfillRecord, Reading};
 use crate::mqtt::{Connection, Message};
 use crate::settings::{MqttConfig, Settings};
 use crate::store::{Entry, SensorId, SensorName, Store};
+use crate::tags::Tags;
 
 /// one day at the five minute cadence; older unsent values are dropped.
 const MAX_PENDING: usize = 288;
 /// a wall clock before this has not been set yet.
-const MIN_VALID_UNIX: u64 = 1_600_000_000;
+pub(crate) const MIN_VALID_UNIX: u64 = 1_600_000_000;
 
 /// state read by the web ui while the ble side keeps writing.
 #[derive(Default)]
 pub struct Shared {
     pub device: String,
     pub store: Mutex<Store>,
+    pub tags: Mutex<Tags>,
     pub pending: AtomicUsize,
     pub free_memory: AtomicUsize,
     pub free_internal: AtomicUsize,
