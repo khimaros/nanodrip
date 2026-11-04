@@ -30,7 +30,7 @@ from `nanodrip.env.example`), or from the environment. all of it is optional:
 | --- | --- |
 | `NANODRIP_WIFI_SSID`, `NANODRIP_WIFI_PASS` | network to join until one is set in the web UI |
 | `NANODRIP_AP_PASS` | password of the setup network (default `nanodrip-setup`) |
-| `NANODRIP_DEVICE` | name used in MQTT topics (default `esp32`) |
+| `NANODRIP_DEVICE` | name shown in the web UI and used in MQTT topics (default `esp32`) |
 | `NANODRIP_MQTT` | broker as `host:port` |
 | `NANODRIP_MQTT_USER`, `NANODRIP_MQTT_PASS` | broker login |
 
@@ -70,8 +70,12 @@ published at QoS 1 as JSON. values wait in memory while the broker is away.
 
 | topic | retained | content |
 | --- | --- | --- |
-| `nanodrip/<device>/glucose` | yes | each live reading |
-| `nanodrip/<device>/backfill` | no | readings recovered after a gap |
+| `nanodrip/<device>/<sensor>/glucose` | yes | each live reading |
+| `nanodrip/<device>/<sensor>/backfill` | no | readings recovered after a gap |
+
+`<sensor>` changes with each new sensor, so subscribe to
+`nanodrip/<device>/+/glucose` to keep following along. the last value of a
+finished sensor stays retained on the broker until it is cleared.
 
     {"sensor":"db5e369f16c2","clock":863970,"time":1799999970,"glucose":143,"state":6,"trend":1.1,"backfill":false}
 
@@ -107,9 +111,10 @@ tags live on the device, so every browser sees the same ones, and they survive
 reboots, flashing and changing sensors.
 
 the statistics follow the selected window, which is one of the range buttons,
-including "max" for everything held, or a span dragged across the chart. with a
-mouse or trackpad over the chart, shift+scroll moves through history and ctrl+scroll
-zooms around the pointer. the mean
+including "max" for everything held, or a span picked on the chart: ctrl+drag with
+a mouse or trackpad, or drag on a touch screen. with a mouse or trackpad over the
+chart, shift+scroll moves through history and ctrl+scroll zooms around the pointer.
+the mean
 counts each reading until the next one, up to 15 minutes, so time with no data is
 left out.
 

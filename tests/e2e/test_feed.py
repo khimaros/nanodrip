@@ -13,8 +13,6 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from harness import CODE, NOW, Broker, Run
 from sensor import Sensor
 
-GLUCOSE_TOPIC = "nanodrip/kitchen/glucose"
-BACKFILL_TOPIC = "nanodrip/kitchen/backfill"
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 ASSETS = pathlib.Path(__file__).parents[2] / "assets"
 
@@ -35,6 +33,10 @@ def mqtt_args(port):
     return ["--device", "kitchen", "--mqtt", f"127.0.0.1:{port}"]
 
 
+def topic(sensor, kind):
+    return f"nanodrip/kitchen/{sensor.address.hex()}/{kind}"
+
+
 def web(run, target, method="GET"):
     conn = http.client.HTTPConnection("127.0.0.1", run.http_port, timeout=5)
     conn.request(method, target)
@@ -51,9 +53,21 @@ def web_json(run, target):
 def test_reading_is_published_retained(tmp_path, signer, broker):
     sensor = Sensor(CODE, signer.public_key(), glucose=143, age=30)
     Run(sensor, tmp_path, signer, args=mqtt_args(broker.port)).connect()
-    assert broker.messages == [(GLUCOSE_TOPIC, {"sensor": sensor.address.hex(), "clock": 863970,
-                                                "time": NOW - 30, "glucose": 143, "state": 6,
-                                                "trend": 1.1, "backfill": False}, True)]
+    assert broker.messages == [(topic(sensor, "glucose"),
+                                {"sensor": sensor.address.hex(), "clock": 863970,
+                                 "time": NOW - 30, "glucose": 143, "state": 6,
+                                 "trend": 1.1, "backfill": False}, True)]
+
+
+def test_each_sensor_has_its_own_topics(tmp_path, signer, broker):
+    args = mqtt_args(broker.port)
+    first = Sensor(CODE, signer.public_key(), glucose=143)
+    second = Sensor(CODE, signer.public_key(), glucose=98, address=bytes.fromhex("a1a2a3a4a5a6"))
+    for name, sensor in (("first", first), ("second", second)):
+        (tmp_path / name).mkdir()
+        Run(sensor, tmp_path / name, signer, args=args).connect()
+    assert [(m[0], m[1]["glucose"]) for m in broker.messages] == [
+        (topic(first, "glucose"), 143), (topic(second, "glucose"), 98)]
 
 
 def test_credentials_are_sent(tmp_path, signer, broker):
@@ -74,10 +88,10 @@ def test_backfill_is_published_unretained(tmp_path, signer, broker):
     sensor.key = bytes.fromhex((tmp_path / "bond.key").read_text())
     sensor.history = [(863000, 101), (863300, 102)]
     Run(sensor, tmp_path, last_seen=862900, args=mqtt_args(broker.port)).connect()
-    backfill = [m for m in broker.messages if m[0] == BACKFILL_TOPIC]
+    backfill = [m for m in broker.messages if m[0] == topic(sensor, "backfill")]
     assert [(m[1]["glucose"], m[1]["backfill"], m[2]) for m in backfill] == [
         (101, True, False), (102, True, False)]
-    assert [m[2] for m in broker.messages if m[0] == GLUCOSE_TOPIC] == [True]
+    assert [m[2] for m in broker.messages if m[0] == topic(sensor, "glucose")] == [True]
 
 
 def test_broker_outage_delivers_after_recovery(tmp_path, signer):

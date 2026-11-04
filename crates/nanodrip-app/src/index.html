@@ -290,7 +290,7 @@ const TAG_BOX_TOP = 36
 /// [label, seconds before now].
 const TAG_SHORTCUTS = [["now", 0], ["-15m", 900], ["-30m", 1800], ["-1h", 3600], ["-2h", 7200]]
 const CONTROLS_HINT = matchMedia("(hover: hover)").matches
-  ? "click to tag, drag to zoom, shift+scroll to move, ctrl+scroll to zoom"
+  ? "click to tag, ctrl+drag to zoom, shift+scroll to move, ctrl+scroll to zoom"
   : "tap to tag, drag to zoom"
 const NARROW_WIDTH = 500
 const DEFAULT_HOURS = 24
@@ -1014,10 +1014,12 @@ function renderChart() {
   const band = element("rect", {class: "selecting", y: MARGIN.top, width: 0,
     height: height - MARGIN.top - MARGIN.bottom})
   svg.append(band)
-  let dragFrom = null, pressed = null
+  let dragFrom = null, pressed = null, zooming = false
   svg.onpointerdown = event => {
     dragFrom = pointerX(event)
     pressed = event.target.closest(".tag")
+    // touch has no ctrl key, so a drag is the only way to pick a span there
+    zooming = event.ctrlKey || event.pointerType !== "mouse"
     svg.setPointerCapture(event.pointerId)
   }
   svg.onpointerup = event => {
@@ -1026,6 +1028,7 @@ function renderChart() {
     dragFrom = null
     band.setAttribute("width", 0)
     if (to - from >= MIN_DRAG_PIXELS) {
+      if (!zooming) return
       selection = {start: timeAt(from), end: timeAt(to)}
       renderRanges()
       renderChart()
@@ -1036,7 +1039,7 @@ function renderChart() {
     }
   }
   svg.onpointermove = event => {
-    if (dragFrom !== null) {
+    if (dragFrom !== null && zooming) {
       const px = pointerX(event)
       band.setAttribute("x", Math.min(dragFrom, px))
       band.setAttribute("width", Math.abs(px - dragFrom))

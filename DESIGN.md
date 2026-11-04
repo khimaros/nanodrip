@@ -83,7 +83,9 @@ encrypts the link before using control because Android does that implicitly.
 - `/api/readings` is streamed a page at a time: long history as JSON does not fit
   in memory, and building it in one piece crashed the device.
 - MQTT uses a short connection per flush at QoS 1, and unconfirmed messages stay
-  queued (up to one day). retained values live on `glucose` only.
+  queued (up to one day). retained values live on `glucose` only. topics carry the
+  sensor so two sensors cannot overwrite each other's retained value, at the cost
+  of a new topic per sensor. the payload names the sensor too.
 - the page keeps all readings in the browser and works out its statistics there,
   fetching again only when the count in `/api/status` changes, with one request
   at a time. tags work the same way through `tag_revision`. range changes need no request. the group chosen for targets lives in

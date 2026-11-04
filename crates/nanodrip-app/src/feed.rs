@@ -8,7 +8,7 @@ use nanodrip_core::{BackfillRecord, Reading};
 
 use crate::mqtt::{Connection, Message};
 use crate::settings::{MqttConfig, Settings};
-use crate::store::{Entry, SensorId, SensorName, Store};
+use crate::store::{hex_id, Entry, SensorId, SensorName, Store};
 use crate::tags::Tags;
 
 /// one day at the five minute cadence; older unsent values are dropped.
@@ -129,7 +129,12 @@ impl Feed {
             self.queue.pop_front();
         }
         self.queue.push_back(Message {
-            topic: format!("nanodrip/{}/{}", self.shared.device, topic),
+            topic: format!(
+                "nanodrip/{}/{}/{}",
+                self.shared.device,
+                hex_id(&entry.sensor),
+                topic
+            ),
             payload: entry.to_json(),
             retain,
         });

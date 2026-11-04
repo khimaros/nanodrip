@@ -269,5 +269,6 @@ def test_page_uses_tags_and_scroll_controls(tmp_path):
     conn.request("GET", "/")
     page = conn.getresponse().read().decode("ascii")
     run.close()
-    for used in ("/api/tags", "/api/tag/remove", "shift+scroll", "ctrl+scroll", '"wheel"'):
+    for used in ("/api/tags", "/api/tag/remove", "shift+scroll", "ctrl+scroll", '"wheel"',
+                 "ctrl+drag to zoom"):
         assert used in page
